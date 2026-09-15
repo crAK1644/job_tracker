@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 import shutil
 import subprocess
 import sys
@@ -121,16 +122,104 @@ def dominant_domains(present: dict, skills: dict) -> list[str]:
     return sorted(doms, key=lambda d: (-counts[d], d))
 
 
+# Month abbreviations (English + Turkish), keyed by the first three letters so
+# "June"->"jun", "sept"->"sep", "mart"->"mar" all resolve. ponytail: 3-letter
+# key is enough for every month in both languages; no full-name table needed.
+_MONTHS = {
+    "jan": 1, "oca": 1, "feb": 2, "şub": 2, "sub": 2, "mar": 3, "apr": 4,
+    "nis": 4, "may": 5, "jun": 6, "haz": 6, "jul": 7, "tem": 7, "aug": 8,
+    "ağu": 8, "agu": 8, "sep": 9, "eyl": 9, "oct": 10, "eki": 10, "nov": 11,
+    "kas": 11, "dec": 12, "ara": 12,
+}
+_MON = r"(?:[A-Za-zçğşıöü]{3,9}\.?\s*)?"          # optional month word before a year
+_PRESENT = r"present|current|now|ongoing|halen|devam\w*|güncel"
+_RANGE = re.compile(
+    rf"({_MON}20\d{{2}})\s*(?:[-–—]{{1,2}}|to)\s*({_MON}20\d{{2}}|{_PRESENT})",
+    re.I,
+)
+_EXP_HEADING = re.compile(
+    r"^\s*(experience|work experience|professional experience|employment|"
+    r"work history|iş deneyimi|deneyim|çalışma)\b", re.I)
+_SECTION_HEADING = re.compile(
+    r"^\s*(education|projects?|technical skills|skills|languages|"
+    r"certifications?|publications?|awards|references?|volunteer|interests|"
+    r"eğitim|projeler|beceriler|yetenekler|sertifika|referans|dil)\b", re.I)
+
+
+def _abs_month(token: str, is_end: bool) -> int | None:
+    """A 'Sep 2022'/'2022' token -> an absolute month number (year*12+month).
+    A year with no month counts as January (start) or December (end)."""
+    ym = re.search(r"20\d{2}", token)
+    if not ym:
+        return None
+    mon = re.search(r"[A-Za-zçğşıöü]{3,}", token)
+    month = _MONTHS.get(mon.group().lower()[:3]) if mon else None
+    if month is None:
+        month = 12 if is_end else 1
+    return int(ym.group()) * 12 + month
+
+
+def _experience_section(text: str) -> str:
+    """Text under the Experience heading up to the next section heading, or ''.
+    Scoping to this section keeps education / project date ranges out of the
+    years-of-experience estimate (codex-sol-7: seniority is a soft signal)."""
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if _EXP_HEADING.match(ln)), None)
+    if start is None:
+        return ""
+    end = next((i for i in range(start + 1, len(lines))
+                if _SECTION_HEADING.match(lines[i])), len(lines))
+    return "\n".join(lines[start + 1:end])
+
+
+def _experience_years(text: str) -> int:
+    """Years of work experience from date ranges in the Experience section.
+    Overlapping ranges are merged (union of months), so concurrent roles are
+    not double-counted; a single span like 'Sep 2022 - Sep 2024' -> 2."""
+    section = _experience_section(text)
+    if not section:
+        return 0
+    today = date.today().year * 12 + date.today().month
+    spans: list[tuple[int, int]] = []
+    for start_tok, end_tok in _RANGE.findall(section):
+        start = _abs_month(start_tok, is_end=False)
+        end = today if re.match(_PRESENT, end_tok, re.I) else _abs_month(end_tok, is_end=True)
+        if start is None or end is None:
+            continue
+        end = min(end, today)              # ignore future (e.g. expected grad) dates
+        if end >= start:
+            spans.append((start, end))
+    if not spans:
+        return 0
+    spans.sort()
+    # Month indices are inclusive on both ends (you work through the end month),
+    # so a span covers (end - start + 1) months.
+    months, cur_start, cur_end = 0, *spans[0]
+    for s, e in spans[1:]:
+        if s <= cur_end + 1:              # overlaps or is contiguous -> extend
+            cur_end = max(cur_end, e)
+        else:
+            months += cur_end - cur_start + 1
+            cur_start, cur_end = s, e
+    months += cur_end - cur_start + 1
+    return months // 12
+
+
 def detect_seniority(text: str) -> tuple[str, int]:
     t = text.lower()
-    yrs = [int(m) for m in re.findall(r"(\d{1,2})\+?\s*(?:years|yıl|yil)", t)]
-    maxyr = max(yrs) if yrs else 0
+    yrs = [int(m) for m in re.findall(r"(\d{1,2})\+?\s*(?:years|yrs|yıl|yil)", t)]
+    # Believe an explicit "N years" phrase or the date-range span, whichever is larger.
+    maxyr = max([*yrs, _experience_years(text)], default=0)
     senior = bool(re.search(r"\b(senior|sr\.?|lead|principal|staff|architect)\b", t))
     junior = bool(re.search(r"\b(junior|jr\.?|intern|internship|new grad|"
                             r"yeni mezun|graduate|entry[ -]level)\b", t))
+    # Measured years win over a stray title word: a past internship must not pin
+    # a multi-year CV to "junior", and 2+ measured years outranks a junior tag.
     if senior or maxyr >= 5:
         return "senior", maxyr
-    if junior or (maxyr and maxyr < 2):
+    if maxyr >= 2:
+        return "mid", maxyr
+    if junior or maxyr < 2:
         return "junior", maxyr
     return "mid", maxyr
 

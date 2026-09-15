@@ -309,7 +309,10 @@ def cmd_selftest(args) -> int:
         if not cond:
             print(f"  FAIL {name}")
 
-    profile = tracker.load_profile()
+    # Pin to profile.yaml only: never read the user's real derived.yaml, so
+    # these gate checks are deterministic whether or not a CV was uploaded
+    # (codex-sol-12).
+    profile = tracker.load_profile(derived_path=Path("/nonexistent/derived-selftest.yaml"))
     filt = tracker.Filter(profile)
 
     senior = sources.job(
@@ -1050,6 +1053,14 @@ def cmd_selftest(args) -> int:
     except ValueError:
         _raised = True
     check("parse_cv_to_derived raises on a too-short CV", _raised)
+
+    # seniority reads date ranges (not just "N years"), scoped to the Experience
+    # section so education/project spans don't inflate it, and merges overlaps.
+    check("seniority derives years from Experience-section date ranges",
+          _cv.detect_seniority("Experience\nEngineer Jan 2020 - Dec 2023\n"
+                               "Education\nBSc 2012 - 2016") == ("mid", 4))
+    check("a past internship does not pin a multi-year CV to junior",
+          _cv.detect_seniority("Experience\nSoftware Intern 2018 - 2024")[0] == "senior")
 
     # Filter.score_only re-ranks without gating (the panel re-scores the pool
     # against a per-user CV): a skill-matching job outscores a skill-less one,
