@@ -55,6 +55,7 @@ import {
   statusLabels,
   workplaceLabels,
   type Dashboard,
+  type Coverage,
   type Job,
   type JobStatus,
   type Scope,
@@ -71,6 +72,8 @@ function App() {
   const [query, setQuery] = useState('')
   const [workplace, setWorkplace] = useState('all')
   const [source, setSource] = useState('all')
+  const [roleFamily, setRoleFamily] = useState('all')
+  const [opportunityType, setOpportunityType] = useState('all')
   const [status, setStatus] = useState('all')
   const [sort, setSort] = useState<SortOrder>('score')
   const [selectedUid, setSelectedUid] = useState<string | null>(null)
@@ -97,11 +100,19 @@ function App() {
   }, [])
 
   const jobs = useMemo(
-    () => filterJobs(dashboard?.jobs ?? [], { scope, query, workplace, source, status, sort }),
-    [dashboard, scope, query, workplace, source, status, sort],
+    () => filterJobs(dashboard?.jobs ?? [], { scope, query, workplace, source, roleFamily, opportunityType, status, sort }),
+    [dashboard, scope, query, workplace, source, roleFamily, opportunityType, status, sort],
   )
   const sources = useMemo(
     () => [...new Set((dashboard?.jobs ?? []).map((job) => job.source).filter(Boolean))].sort(),
+    [dashboard],
+  )
+  const roleFamilies = useMemo(
+    () => [...new Set((dashboard?.jobs ?? []).map((job) => job.roleFamily).filter(Boolean))].sort(),
+    [dashboard],
+  )
+  const opportunityTypes = useMemo(
+    () => [...new Set((dashboard?.jobs ?? []).map((job) => job.opportunityType).filter(Boolean))].sort(),
     [dashboard],
   )
   const maxScore = useMemo(
@@ -182,6 +193,7 @@ function App() {
 
   const activeCount = (dashboard?.counts.new ?? 0) + (dashboard?.counts.interested ?? 0) + (dashboard?.counts.applied ?? 0)
   const archiveCount = (dashboard?.counts.rejected ?? 0) + (dashboard?.counts.ignored ?? 0) + (dashboard?.counts.closed ?? 0)
+  const reviewCount = (dashboard?.jobs ?? []).filter((job) => ['new', 'interested', 'applied'].includes(job.status) && job.eligibility === 'review').length
 
   return (
     <main className="min-h-screen pb-12">
@@ -190,7 +202,7 @@ function App() {
           <div className="max-w-2xl">
             <div className="mb-3 flex items-center gap-2 text-sm text-primary">
               <Target className="size-4" aria-hidden="true" />
-              <span>İstanbul ve uzaktan DS · ML · AI fırsatları</span>
+              <span>İstanbul ve Türkiye uyumlu bilgisayar mühendisliği fırsatları</span>
             </div>
             <h1 className="text-3xl font-semibold tracking-[-0.045em] text-foreground sm:text-4xl">İş radarı</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
@@ -254,6 +266,7 @@ function App() {
                   <Tabs value={scope} onValueChange={(value) => { setScope(value as Scope); setStatus('all') }}>
                     <TabsList className="h-9 bg-muted/70">
                       <TabsTrigger value="active" className="gap-1.5 px-3">Aktif <span className="text-muted-foreground">{activeCount}</span></TabsTrigger>
+                      <TabsTrigger value="review" className="gap-1.5 px-3">İncele <span className="text-muted-foreground">{reviewCount}</span></TabsTrigger>
                       <TabsTrigger value="archive" className="gap-1.5 px-3"><Archive className="size-3.5" /> Arşiv <span className="text-muted-foreground">{archiveCount}</span></TabsTrigger>
                     </TabsList>
                   </Tabs>
@@ -266,7 +279,7 @@ function App() {
                   </div>
                 </div>
 
-                <div className="grid gap-2 lg:grid-cols-[minmax(15rem,1fr)_repeat(4,minmax(9rem,auto))]">
+                <div className="grid gap-2 xl:grid-cols-[minmax(15rem,1fr)_repeat(6,minmax(8rem,auto))]">
                   <label className="relative block">
                     <span className="sr-only">İlanlarda ara</span>
                     <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -276,9 +289,11 @@ function App() {
                     ['all', 'Tüm çalışma biçimleri'], ['remote', 'Uzaktan'], ['hybrid', 'Hibrit'], ['onsite', 'Ofis'], ['unknown', 'Belirsiz'],
                   ]} />
                   <FilterSelect value={source} onValueChange={setSource} placeholder="Kaynak" items={[['all', 'Tüm kaynaklar'], ...sources.map((item) => [item, item])]} />
+                  <FilterSelect value={roleFamily} onValueChange={setRoleFamily} placeholder="Alan" items={[['all', 'Tüm alanlar'], ...roleFamilies.map((item) => [item, roleFamilyLabel(item)])]} />
+                  <FilterSelect value={opportunityType} onValueChange={setOpportunityType} placeholder="Fırsat" items={[['all', 'Tüm fırsatlar'], ...opportunityTypes.map((item) => [item, opportunityLabel(item)])]} />
                   <FilterSelect value={status} onValueChange={setStatus} placeholder="Durum" items={[
                     ['all', 'Tüm durumlar'],
-                    ...(scope === 'active' ? ['new', 'interested', 'applied'] : ['rejected', 'ignored', 'closed']).map((item) => [item, statusLabels[item as JobStatus]]),
+                    ...(scope === 'archive' ? ['rejected', 'ignored', 'closed'] : ['new', 'interested', 'applied']).map((item) => [item, statusLabels[item as JobStatus]]),
                   ]} />
                   <FilterSelect value={sort} onValueChange={(value) => setSort(value as SortOrder)} placeholder="Sıralama" items={[
                     ['score', 'Uyum puanı'], ['newest', 'En yeni'], ['company', 'Şirket adı'],
@@ -289,7 +304,7 @@ function App() {
 
             <div className="mb-3 flex items-center justify-between text-sm text-muted-foreground">
               <span>{jobs.length} ilan gösteriliyor</span>
-              <span>{scope === 'active' ? 'Başvuru için açık fırsatlar' : 'Geçmiş kararlar ve kapanan ilanlar'}</span>
+              <span>{scope === 'active' ? 'İstanbul veya Türkiye için doğrulanmış fırsatlar' : scope === 'review' ? 'Konumu ya da çalışma izni teyit edilmesi gereken fırsatlar' : 'Geçmiş kararlar ve kapanan ilanlar'}</span>
             </div>
 
             {jobs.length > 0 ? (
@@ -308,8 +323,9 @@ function App() {
                 ))}
               </section>
             ) : (
-              <EmptyState scope={scope} hasFilters={Boolean(query || workplace !== 'all' || source !== 'all' || status !== 'all')} onClear={() => { setQuery(''); setWorkplace('all'); setSource('all'); setStatus('all') }} />
+              <EmptyState scope={scope} hasFilters={Boolean(query || workplace !== 'all' || source !== 'all' || roleFamily !== 'all' || opportunityType !== 'all' || status !== 'all')} onClear={() => { setQuery(''); setWorkplace('all'); setSource('all'); setRoleFamily('all'); setOpportunityType('all'); setStatus('all') }} />
             )}
+            <CoverageSection coverage={dashboard.coverage} />
           </>
         ) : null}
       </div>
@@ -323,13 +339,38 @@ function MetricCard({ label, value, icon, signal }: { label: string; value: numb
   return <Card className="overflow-hidden border-border/80 bg-card/70 shadow-none"><CardContent className="flex items-start justify-between p-4"><div><p className="text-sm text-muted-foreground">{label}</p><p className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{value}</p></div><span className={signal === 'fresh' ? 'rounded-lg bg-emerald-400/10 p-2 text-emerald-300' : 'rounded-lg bg-primary/10 p-2 text-primary'}>{icon}</span></CardContent></Card>
 }
 
+const roleFamilyLabel = (value: string) => ({
+  software: 'Yazılım', data_ai: 'Veri ve yapay zekâ', quality: 'Kalite ve test',
+  platform_cloud: 'Bulut ve platform', security: 'Siber güvenlik', embedded: 'Gömülü sistemler',
+  research: 'Araştırma', graduate_programme: 'Yeni mezun programı',
+} as Record<string, string>)[value] ?? value
+
+const opportunityLabel = (value: string) => ({
+  job: 'Tam zamanlı', internship: 'Staj', part_time: 'Yarı zamanlı',
+  graduate_programme: 'Yeni mezun programı', research: 'Araştırma',
+} as Record<string, string>)[value] ?? value
+
+function CoverageSection({ coverage }: { coverage: Coverage[] }) {
+  const summary = coverage.reduce<Record<string, number>>((counts, item) => {
+    counts[item.collectionStatus] = (counts[item.collectionStatus] ?? 0) + 1
+    return counts
+  }, {})
+  return <section className="mt-8 rounded-xl border border-border/80 bg-card/60 p-4 sm:p-5" aria-label="Şirket kapsama durumu">
+    <div className="flex flex-wrap items-baseline justify-between gap-2"><div><h2 className="font-semibold">Şirket kapsama durumu</h2><p className="mt-1 text-sm text-muted-foreground">Her kayıt, canlı tarama sonucu veya takip edilmesi gereken erişim durumunu gösterir.</p></div><Badge variant="outline">{coverage.length} şirket</Badge></div>
+    <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">{Object.entries(summary).sort().map(([status, count]) => <Badge key={status} variant="outline" className="font-normal">{coverageStatusLabel(status)}: {count}</Badge>)}</div>
+    <div className="mt-4 max-h-72 overflow-auto rounded-lg border border-border/70"><table className="w-full text-left text-sm"><thead className="sticky top-0 bg-card text-xs text-muted-foreground"><tr><th className="p-3 font-medium">Şirket</th><th className="p-3 font-medium">Durum</th><th className="p-3 font-medium">İlan</th><th className="p-3 font-medium">Not</th></tr></thead><tbody>{coverage.map((item) => <tr key={`${item.companyKey}-${item.careersUrl ?? ''}`} className="border-t border-border/60"><td className="p-3">{item.careersUrl ? <a className="hover:text-primary hover:underline" href={item.careersUrl} target="_blank" rel="noreferrer">{item.company}</a> : item.company}</td><td className="p-3">{coverageStatusLabel(item.collectionStatus)}</td><td className="p-3">{item.jobsSeen}</td><td className="max-w-md p-3 text-xs text-muted-foreground">{item.detail || item.evidence}</td></tr>)}</tbody></table></div>
+  </section>
+}
+
+const coverageStatusLabel = (value: string) => ({ complete: 'Tamamlandı', empty: 'Boş', partial: 'Kısmi', failed: 'Hata', blocked: 'Erişim engeli', unchecked: 'Kontrol edilmedi', verified: 'Doğrulandı' } as Record<string, string>)[value] ?? value
+
 function FilterSelect({ value, onValueChange, placeholder, items }: { value: string; onValueChange: (value: string) => void; placeholder: string; items: string[][] }) {
   return <Select value={value} onValueChange={onValueChange}><SelectTrigger className="h-9 w-full bg-background/50 lg:w-[10.5rem]"><SelectValue placeholder={placeholder} /></SelectTrigger><SelectContent>{items.map(([itemValue, label]) => <SelectItem key={itemValue} value={itemValue}>{label}</SelectItem>)}</SelectContent></Select>
 }
 
 function JobCard({ job, maxScore, isNew, saving, onOpen, onChangeStatus, onCopyCv }: { job: Job; maxScore: number; isNew: boolean; saving: boolean; onOpen: () => void; onChangeStatus: (job: Job, status: JobStatus) => void; onCopyCv: (job: Job) => void }) {
   const score = Math.round((job.score / maxScore) * 100)
-  return <Card className="group overflow-hidden border-border/80 bg-card/80 shadow-none transition-colors hover:border-primary/35"><CardContent className="grid gap-4 p-4 lg:grid-cols-[5.5rem_minmax(0,1fr)_auto] lg:items-start lg:p-5"><div className="rounded-lg border border-border/80 bg-background/45 p-3 lg:row-span-2"><div className="flex items-baseline justify-between gap-1"><span className="text-2xl font-semibold tracking-[-0.05em]">{Math.round(job.score)}</span><span className="text-xs text-muted-foreground">puan</span></div><Progress value={score} className="mt-2 h-1.5 bg-muted" /><p className="mt-2 text-xs text-muted-foreground">uyum oranı</p></div><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-medium text-foreground">{job.company}</span>{isNew ? <Badge className="border-0 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/15">Yeni</Badge> : null}<StatusBadge status={job.status} /></div><button type="button" onClick={onOpen} className="mt-1 flex max-w-full items-center gap-1 text-left text-lg font-semibold tracking-[-0.025em] text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="truncate">{job.title}</span><ChevronRight className="size-4 shrink-0" aria-hidden="true" /></button><div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"><span className="inline-flex items-center gap-1"><MapPin className="size-3.5" />{job.location || 'Konum belirtilmemiş'}</span><span>{workplaceLabels[job.workplace] ?? job.workplace}</span><span>{formatPostedAt(job.postedAt)}</span><span className="truncate">{job.source}</span></div>{job.matchedSkills.length > 0 ? <div className="mt-3 flex flex-wrap gap-1.5">{job.matchedSkills.map((skill) => <Badge key={skill} variant="outline" className="border-primary/20 bg-primary/5 px-2 py-0.5 font-normal text-primary/90">{skill}</Badge>)}</div> : null}</div><JobActions job={job} saving={saving} onChangeStatus={onChangeStatus} onCopyCv={onCopyCv} /></CardContent></Card>
+  return <Card className="group overflow-hidden border-border/80 bg-card/80 shadow-none transition-colors hover:border-primary/35"><CardContent className="grid gap-4 p-4 lg:grid-cols-[5.5rem_minmax(0,1fr)_auto] lg:items-start lg:p-5"><div className="rounded-lg border border-border/80 bg-background/45 p-3 lg:row-span-2"><div className="flex items-baseline justify-between gap-1"><span className="text-2xl font-semibold tracking-[-0.05em]">{Math.round(job.score)}</span><span className="text-xs text-muted-foreground">puan</span></div><Progress value={score} className="mt-2 h-1.5 bg-muted" /><p className="mt-2 text-xs text-muted-foreground">uyum oranı</p></div><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-medium text-foreground">{job.company}</span>{isNew ? <Badge className="border-0 bg-emerald-400/15 text-emerald-200 hover:bg-emerald-400/15">Yeni</Badge> : null}<StatusBadge status={job.status} /><Badge variant="outline" className={job.eligibility === 'review' ? 'border-amber-300/30 text-amber-200' : 'border-emerald-300/30 text-emerald-200'}>{job.eligibility === 'review' ? 'İncelenmeli' : 'Konum uygun'}</Badge></div><button type="button" onClick={onOpen} className="mt-1 flex max-w-full items-center gap-1 text-left text-lg font-semibold tracking-[-0.025em] text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="truncate">{job.title}</span><ChevronRight className="size-4 shrink-0" aria-hidden="true" /></button><div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"><span className="inline-flex items-center gap-1"><MapPin className="size-3.5" />{job.location || 'Konum belirtilmemiş'}</span><span>{workplaceLabels[job.workplace] ?? job.workplace}</span><span>{formatPostedAt(job.postedAt)}</span><span className="truncate">{job.source}</span></div><div className="mt-3 flex flex-wrap gap-1.5"><Badge variant="outline" className="font-normal">{roleFamilyLabel(job.roleFamily)}</Badge><Badge variant="outline" className="font-normal">{opportunityLabel(job.opportunityType)}</Badge>{job.studentCompatible ? <Badge variant="outline" className="font-normal">Öğrenci dostu</Badge> : null}{job.matchedSkills.map((skill) => <Badge key={skill} variant="outline" className="border-primary/20 bg-primary/5 px-2 py-0.5 font-normal text-primary/90">{skill}</Badge>)}</div></div><JobActions job={job} saving={saving} onChangeStatus={onChangeStatus} onCopyCv={onCopyCv} /></CardContent></Card>
 }
 
 function JobActions({ job, saving, onChangeStatus, onCopyCv }: { job: Job; saving: boolean; onChangeStatus: (job: Job, status: JobStatus) => void; onCopyCv: (job: Job) => void }) {
@@ -344,13 +385,13 @@ function StatusBadge({ status }: { status: JobStatus }) {
 
 function JobDetails({ job, open, onOpenChange, maxScore, saving, onChangeStatus, onCopyCv }: { job: Job | null; open: boolean; onOpenChange: (open: boolean) => void; maxScore: number; saving: boolean; onChangeStatus: (job: Job, status: JobStatus) => void; onCopyCv: (job: Job) => void }) {
   if (!job) return null
-  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full overflow-y-auto border-border bg-card p-0 sm:max-w-xl"><div className="p-6 sm:p-8"><SheetHeader className="text-left"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-primary">{job.company}</span><StatusBadge status={job.status} /></div><SheetTitle className="mt-2 text-2xl leading-tight tracking-[-0.04em]">{job.title}</SheetTitle></SheetHeader><div className="mt-5 flex flex-wrap gap-2"><Badge variant="outline">{job.location || 'Konum belirtilmemiş'}</Badge><Badge variant="outline">{workplaceLabels[job.workplace] ?? job.workplace}</Badge><Badge variant="outline">{Math.round(job.score)} puan</Badge></div><Progress value={Math.round((job.score / maxScore) * 100)} className="mt-3 h-1.5" /><div className="mt-6 flex flex-wrap gap-2">{job.url ? <Button asChild><a href={job.url} target="_blank" rel="noreferrer">İlanı aç <ExternalLink /></a></Button> : null}<Button variant="outline" onClick={() => void onCopyCv(job)}><Clipboard />CV komutunu kopyala</Button>{job.status !== 'closed' ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="secondary" disabled={saving}>{saving ? <LoaderCircle className="animate-spin" /> : null}Durumu değiştir</Button></DropdownMenuTrigger><DropdownMenuContent align="end">{editableStatuses.map((next) => <DropdownMenuItem key={next} disabled={job.status === next} onSelect={() => onChangeStatus(job, next)}>{statusLabels[next]}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}</div>{job.matchedSkills.length > 0 ? <section className="mt-8"><h2 className="text-sm font-medium text-foreground">Eşleşen beceriler</h2><div className="mt-3 flex flex-wrap gap-1.5">{job.matchedSkills.map((skill) => <Badge key={skill} variant="outline" className="border-primary/20 bg-primary/5 text-primary">{skill}</Badge>)}</div></section> : null}<section className="mt-8"><h2 className="text-sm font-medium text-foreground">İlan açıklaması</h2><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">{job.description || 'İlan kaynağı açıklama paylaşmadı.'}</p></section><section className="mt-8 border-t border-border pt-5 text-sm text-muted-foreground"><dl className="grid grid-cols-2 gap-x-4 gap-y-3"><div><dt>Kaynak</dt><dd className="mt-0.5 text-foreground">{job.source || '—'}</dd></div><div><dt>Yayın tarihi</dt><dd className="mt-0.5 text-foreground">{formatPostedAt(job.postedAt)}</dd></div><div><dt>Son görüldü</dt><dd className="mt-0.5 text-foreground">{formatRunTime(job.lastSeen)}</dd></div><div><dt>İlan kimliği</dt><dd className="mt-0.5 break-all font-mono text-xs text-foreground">{job.uid}</dd></div></dl></section></div></SheetContent></Sheet>
+  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="w-full overflow-y-auto border-border bg-card p-0 sm:max-w-xl"><div className="p-6 sm:p-8"><SheetHeader className="text-left"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-primary">{job.company}</span><StatusBadge status={job.status} /></div><SheetTitle className="mt-2 text-2xl leading-tight tracking-[-0.04em]">{job.title}</SheetTitle></SheetHeader><div className="mt-5 flex flex-wrap gap-2"><Badge variant="outline">{job.location || 'Konum belirtilmemiş'}</Badge><Badge variant="outline">{workplaceLabels[job.workplace] ?? job.workplace}</Badge><Badge variant="outline">{roleFamilyLabel(job.roleFamily)}</Badge><Badge variant="outline">{opportunityLabel(job.opportunityType)}</Badge><Badge variant="outline">{Math.round(job.score)} puan</Badge></div>{job.eligibilityReason ? <Alert className="mt-4 border-amber-300/20 bg-amber-300/5"><CircleAlert className="size-4" /><AlertDescription>{job.eligibilityReason}</AlertDescription></Alert> : null}<Progress value={Math.round((job.score / maxScore) * 100)} className="mt-3 h-1.5" /><div className="mt-6 flex flex-wrap gap-2">{job.url ? <Button asChild><a href={job.url} target="_blank" rel="noreferrer">İlanı aç <ExternalLink /></a></Button> : null}<Button variant="outline" onClick={() => void onCopyCv(job)}><Clipboard />CV komutunu kopyala</Button>{job.status !== 'closed' ? <DropdownMenu><DropdownMenuTrigger asChild><Button variant="secondary" disabled={saving}>{saving ? <LoaderCircle className="animate-spin" /> : null}Durumu değiştir</Button></DropdownMenuTrigger><DropdownMenuContent align="end">{editableStatuses.map((next) => <DropdownMenuItem key={next} disabled={job.status === next} onSelect={() => onChangeStatus(job, next)}>{statusLabels[next]}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}</div>{job.matchedSkills.length > 0 ? <section className="mt-8"><h2 className="text-sm font-medium text-foreground">Eşleşen beceriler</h2><div className="mt-3 flex flex-wrap gap-1.5">{job.matchedSkills.map((skill) => <Badge key={skill} variant="outline" className="border-primary/20 bg-primary/5 text-primary">{skill}</Badge>)}</div></section> : null}<section className="mt-8"><h2 className="text-sm font-medium text-foreground">İlan açıklaması</h2><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">{job.description || 'İlan kaynağı açıklama paylaşmadı.'}</p></section><section className="mt-8 border-t border-border pt-5 text-sm text-muted-foreground"><dl className="grid grid-cols-2 gap-x-4 gap-y-3"><div><dt>Kaynak</dt><dd className="mt-0.5 text-foreground">{job.source || '—'}</dd></div><div><dt>Yayın tarihi</dt><dd className="mt-0.5 text-foreground">{formatPostedAt(job.postedAt)}</dd></div><div><dt>Son görüldü</dt><dd className="mt-0.5 text-foreground">{formatRunTime(job.lastSeen)}</dd></div><div><dt>İlan kimliği</dt><dd className="mt-0.5 break-all font-mono text-xs text-foreground">{job.uid}</dd></div></dl></section></div></SheetContent></Sheet>
 }
 
 function DashboardSkeleton() { return <div className="space-y-5 py-6"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-28 rounded-xl" />)}</div>{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-40 rounded-xl" />)}</div> }
 
 function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) { return <Alert variant="destructive" className="mt-6"><CircleAlert /><AlertTitle>Panel yüklenemedi</AlertTitle><AlertDescription className="mt-2 flex flex-wrap items-center gap-3"><span>{message}</span><Button variant="outline" size="sm" onClick={onRetry}>Tekrar dene</Button></AlertDescription></Alert> }
 
-function EmptyState({ scope, hasFilters, onClear }: { scope: Scope; hasFilters: boolean; onClear: () => void }) { return <Card className="border-dashed border-border bg-card/50"><CardContent className="flex flex-col items-center px-6 py-16 text-center"><div className="rounded-full bg-muted p-3 text-muted-foreground">{scope === 'active' ? <Search /> : <Archive />}</div><h2 className="mt-4 text-lg font-semibold">{hasFilters ? 'Bu filtrelerle eşleşen ilan yok' : scope === 'active' ? 'Şu an aktif ilan yok' : 'Arşiv henüz boş'}</h2><p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{hasFilters ? 'Aramayı genişletin veya filtreleri temizleyin.' : scope === 'active' ? '`uv run python run.py fetch` komutu yeni ilanları veritabanına ekler.' : 'Bir ilanı reddettiğinizde veya yok saydığınızda burada görünecek.'}</p>{hasFilters ? <Button variant="outline" className="mt-5" onClick={onClear}>Filtreleri temizle</Button> : null}</CardContent></Card> }
+function EmptyState({ scope, hasFilters, onClear }: { scope: Scope; hasFilters: boolean; onClear: () => void }) { return <Card className="border-dashed border-border bg-card/50"><CardContent className="flex flex-col items-center px-6 py-16 text-center"><div className="rounded-full bg-muted p-3 text-muted-foreground">{scope === 'archive' ? <Archive /> : <Search />}</div><h2 className="mt-4 text-lg font-semibold">{hasFilters ? 'Bu filtrelerle eşleşen ilan yok' : scope === 'active' ? 'Şu an doğrulanmış ilan yok' : scope === 'review' ? 'İncelenecek ilan yok' : 'Arşiv henüz boş'}</h2><p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{hasFilters ? 'Aramayı genişletin veya filtreleri temizleyin.' : scope === 'active' ? '`uv run python run.py fetch` komutu yeni ilanları veritabanına ekler.' : scope === 'review' ? 'Konumu veya Türkiye’den çalışma uygunluğu açıkça doğrulanamayan ilanlar burada görünür.' : 'Bir ilanı reddettiğinizde veya yok saydığınızda burada görünecek.'}</p>{hasFilters ? <Button variant="outline" className="mt-5" onClick={onClear}>Filtreleri temizle</Button> : null}</CardContent></Card> }
 
 export default App

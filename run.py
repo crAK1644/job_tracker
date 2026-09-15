@@ -37,11 +37,64 @@ REPORT_PATH = Path(__file__).parent / "report.html"
 
 
 def load_companies() -> list[dict]:
-    return yaml.safe_load(COMPANIES_PATH.read_text(encoding="utf-8"))["companies"]
+    """Load both the original single-board entries and the expanded catalogue.
+
+    Normalising here keeps the hand-edited YAML readable while giving every
+    employer a stable key, visible careers link, collection method and status.
+    """
+    companies = yaml.safe_load(COMPANIES_PATH.read_text(encoding="utf-8"))["companies"]
+    for entry in companies:
+        entry.setdefault("id", re.sub(r"[^a-z0-9]+", "-", entry["name"].lower()).strip("-"))
+        ats, token = entry.get("ats"), entry.get("token")
+        if not entry.get("careers_url"):
+            if ats == "lever" and token:
+                entry["careers_url"] = f"https://jobs.lever.co/{token}"
+            elif ats == "ashby" and token:
+                entry["careers_url"] = f"https://jobs.ashbyhq.com/{token}"
+            elif ats == "greenhouse" and token:
+                entry["careers_url"] = f"https://boards.greenhouse.io/{token}"
+            else:
+                entry["careers_url"] = f"https://{entry['domain']}/careers"
+        entry.setdefault("collection_method", "ats" if ats not in (None, "unknown") else "manual")
+        entry.setdefault("collection_status", "verified" if entry.get("verified") else "unchecked")
+        entry.setdefault("verification", "Verified public ATS board." if entry.get("verified")
+                         else "Official careers destination needs a live check.")
+        if "boards" not in entry:
+            entry["boards"] = [{
+                "ats": ats, "token": token, "careers_url": entry["careers_url"],
+                "collection_method": entry["collection_method"],
+                "collection_status": entry["collection_status"],
+                "verification": entry["verification"],
+            }]
+    return companies
+
+
+def company_boards(entry: dict) -> list[dict]:
+    return [board for board in entry.get("boards") or [] if board.get("enabled") is not False]
 
 
 def run_id_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cmd_audit(args) -> int:
+    """Sync catalogue coverage and reclassify stored history without fetching."""
+    companies = load_companies()
+    conn = tracker.connect()
+    try:
+        tracker.register_employer_coverage(conn, companies)
+        rekeyed = tracker.rekey_legacy_jobs(conn)
+        reclassified = tracker.reclassify_jobs(
+            conn, tracker.Filter(tracker.load_profile(include_derived=False)))
+        states = dict(conn.execute(
+            "SELECT collection_status, COUNT(*) FROM employer_coverage GROUP BY collection_status"
+        ).fetchall())
+    finally:
+        conn.close()
+    print(f"catalogue : {len(companies)} employers")
+    print(f"coverage  : {states}")
+    print(f"jobs      : {reclassified} reclassified, {rekeyed} IDs reconciled")
+    return 0
 
 
 # --------------------------------------------------------------------- fetch
@@ -72,10 +125,16 @@ def degraded_sources(conn, per_source: dict[str, int]) -> dict[str, str]:
 
 
 def cmd_fetch(args) -> int:
-    profile = tracker.load_profile()
+    # A personal CV ranks results after collection. It must never narrow the
+    # globally useful catalogue for a different graduate or master’s student.
+    profile = tracker.load_profile(include_derived=False)
     filt = tracker.Filter(profile)
     conn = tracker.connect()
     run_id = run_id_now()
+    companies = load_companies()
+    tracker.register_employer_coverage(conn, companies)
+    tracker.rekey_legacy_jobs(conn)
+    tracker.reclassify_jobs(conn, filt)
 
     only = None
     if args.source is not None:
@@ -96,23 +155,35 @@ def cmd_fetch(args) -> int:
     c = sources.client()
     try:
         # Group A: per-company ATS boards
-        for entry in load_companies():
+        for entry in companies:
             if entry.get("enabled") is False:
                 continue
-            ats, token = entry.get("ats"), entry.get("token")
-            if ats in (None, "unknown") or not token:
-                continue
-            tag = f"{ats}:{token}"
-            if only and tag not in only and entry["name"] not in only:
-                continue
-            try:
-                jobs = sources.fetch_company(entry, c)
-                per_source[tag] = len(jobs)
-                raw_jobs.extend(jobs)
-            except httpx.HTTPError as e:
-                errors.append(f"{tag}: HTTP error {e}")
-            except Exception as e:  # noqa: BLE001 - one bad board must not kill the run
-                errors.append(f"{tag}: {type(e).__name__}: {e}")
+            for board in company_boards(entry):
+                ats, token = board.get("ats"), board.get("token")
+                if ats in (None, "unknown") or not token:
+                    continue
+                tag = f"{ats}:{token}"
+                if only and tag not in only and entry["name"] not in only and entry["id"] not in only:
+                    continue
+                try:
+                    jobs = sources.fetch_company({**entry, **board}, c)
+                    per_source[tag] = len(jobs)
+                    raw_jobs.extend(jobs)
+                    status = "partial" if tag in sources.TRUNCATED else ("complete" if jobs else "empty")
+                    tracker.update_employer_coverage(conn, entry, board, status=status,
+                                                     checked_at=run_id, jobs_seen=len(jobs),
+                                                     detail=sources.TRUNCATED.get(tag, ""))
+                except httpx.HTTPStatusError as e:
+                    status = "blocked" if e.response.status_code in {401, 403, 429} else "failed"
+                    detail = f"HTTP {e.response.status_code}"
+                    errors.append(f"{tag}: {detail}")
+                    tracker.update_employer_coverage(conn, entry, board, status=status,
+                                                     checked_at=run_id, detail=detail)
+                except Exception as e:  # noqa: BLE001 - one bad board must not kill the run
+                    detail = f"{type(e).__name__}: {e}"
+                    errors.append(f"{tag}: {detail}")
+                    tracker.update_employer_coverage(conn, entry, board, status="failed",
+                                                     checked_at=run_id, detail=detail)
 
         # Group B: job boards
         for name, fn in sources.BOARD_FETCHERS.items():
@@ -129,10 +200,16 @@ def cmd_fetch(args) -> int:
     finally:
         c.close()
 
-    # Group C: Playwright-backed sources - only pay the browser cost when asked.
-    if args.browser:
-        import browser_sources  # lazy: pulls in playwright
-        for name, fn in browser_sources.BROWSER_FETCHERS.items():
+    # Group C: browser-backed sources are part of a full scan. `--http-only`
+    # makes a quick deterministic API/HTML scan and reports browser coverage as
+    # unchecked instead of pretending it was inspected.
+    if not args.http_only:
+        try:
+            import browser_sources  # lazy: a missing optional dependency is explicit below
+        except ModuleNotFoundError as e:
+            errors.append(f"browser sources unavailable: install browser extra ({e.name})")
+            browser_sources = None
+        for name, fn in (browser_sources.BROWSER_FETCHERS.items() if browser_sources else []):
             if only and name not in only:
                 continue
             try:
@@ -145,11 +222,18 @@ def cmd_fetch(args) -> int:
     kept = []
     reasons: dict[str, int] = {}
     for j in raw_jobs:
-        ok, score, reason = filt.evaluate(j)
-        if ok:
-            j["score"] = score
+        classified = filt.classify(j)
+        if classified["keep"]:
+            # classify already decided to keep this row; score_only gives the
+            # real ranking value without re-gating. evaluate() would return 0
+            # for a `review` row it deems too vague, burying every review job
+            # at the bottom of report.html (its accept path returns score_only
+            # anyway, so confirmed rows are unchanged).
+            j["score"] = filt.score_only(j)
+            j.update({k: v for k, v in classified.items() if k != "keep"})
             kept.append(j)
         else:
+            reason = classified["reason"]
             reasons[reason] = reasons.get(reason, 0) + 1
 
     counts = tracker.upsert_jobs(conn, kept, run_id)
@@ -177,12 +261,16 @@ def cmd_fetch(args) -> int:
             print(f"  ~ {tag}: {why}")
 
     import json as _json
-    conn.execute(
-        "INSERT OR REPLACE INTO runs (run_id, summary) VALUES (?, ?)",
-        (run_id, _json.dumps({"per_source": per_source, "errors": errors,
-                              "degraded": degraded})),
-    )
-    conn.commit()
+    # A scoped probe updates rows and employer coverage, but is not a complete
+    # dashboard scan. Do not replace the latest full-run health summary with a
+    # one-source result.
+    if only is None:
+        conn.execute(
+            "INSERT OR REPLACE INTO runs (run_id, summary) VALUES (?, ?)",
+            (run_id, _json.dumps({"per_source": per_source, "errors": errors,
+                                  "degraded": degraded})),
+        )
+        conn.commit()
     conn.close()
     return 0
 
@@ -456,8 +544,8 @@ def cmd_selftest(args) -> int:
                      "applications. Go, Python.",
     )
     ok, score, reason = filt.evaluate(boilerplate_leak)
-    check("company-blurb ML mention alone does not pass the topic gate",
-          ok is False and reason == "no_topic_match")
+    check("a software-engineer title is accepted without AI-keyword boilerplate",
+          ok is True)
 
     ankara_unknown_wp = sources.job(
         "Some Co", "Yapay Zeka Mühendisi", "https://example.com/j/10",
@@ -951,7 +1039,12 @@ def cmd_selftest(args) -> int:
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
-            self.wfile.write(b"ok")
+            try:
+                self.wfile.write(b"ok")
+            except BrokenPipeError:
+                # The intentional timeout closes the first test client before
+                # this slow handler wakes up; that is expected, not test noise.
+                pass
 
         def log_message(self, *a): pass
 
@@ -1210,9 +1303,13 @@ def main() -> int:
     p = sub.add_parser("fetch", help="pull all sources, filter, score, store")
     p.add_argument("--source", nargs="*", help="restrict to these source tags, e.g. lever:trendyol")
     p.add_argument("--browser", action="store_true",
-                    help="also run Playwright-backed sources (hiring.cafe) - slower, "
-                         "off by default so the daily path never pays the browser cost")
+                    help="compatibility flag; browser sources are included unless --http-only is set")
+    p.add_argument("--http-only", action="store_true",
+                    help="skip Playwright-backed sources for a fast API/HTML-only scan")
     p.set_defaults(func=cmd_fetch)
+
+    p = sub.add_parser("audit", help="sync catalogue coverage and reclassify stored jobs without fetching")
+    p.set_defaults(func=cmd_audit)
 
     p = sub.add_parser("report", help="render report.html from the DB")
     p.set_defaults(func=cmd_report)

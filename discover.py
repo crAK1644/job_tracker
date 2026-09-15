@@ -13,6 +13,7 @@ browser cost.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 import sources
 
@@ -47,7 +48,9 @@ WORKDAY_RX = re.compile(r"([a-z0-9_-]+)\.(wd\d)\.myworkdayjobs\.com/(?:wday/cxs/
 # ATS families we can recognize on sight but don't have a sources.fetch_<ats>
 # for - report the hit instead of pretending nothing was found, so a human can
 # add support or fill the token in by hand.
-UNSUPPORTED_ATS = {"careers-page", "successfactors", "jobvite"}
+# These portals use the HTML fallback in sources.py. Keep the set for future
+# signatures that are detected but still have no public collector.
+UNSUPPORTED_ATS: set[str] = set()
 
 # Hosts that are ATS-shaped but not actually the company's own board (widgets,
 # CDNs, generic pixel trackers that happen to match a loose regex).
@@ -81,8 +84,16 @@ def probe_company(page, domain: str, timeout_ms: int = 15000) -> tuple[str, str]
     try:
         candidates = [f"https://{domain}{p}" for p in CANDIDATE_PATHS]
         candidates += [f"https://{sd.format(d=domain)}" for sd in CANDIDATE_SUBDOMAINS]
+        visited: set[str] = set()
 
-        for url in candidates:
+        # A careers landing page often links to /join-us or /open-positions
+        # before it embeds an ATS. Follow a small, same-domain queue instead
+        # of assuming every employer uses the conventional /careers path.
+        while candidates and len(visited) < 24:
+            url = candidates.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
             try:
                 page.goto(url, wait_until="networkidle", timeout=timeout_ms)
             except Exception:
@@ -100,6 +111,12 @@ def probe_company(page, domain: str, timeout_ms: int = 15000) -> tuple[str, str]
                 hit = _scan_signature(href)
                 if hit:
                     found.setdefault(hit[0], hit)
+                    continue
+                parsed = urlsplit(href)
+                same_company = parsed.hostname and (
+                    parsed.hostname == domain or parsed.hostname.endswith(f".{domain}"))
+                if same_company and re.search(r"career|kariyer|job|position|ilan|join", parsed.path, re.I):
+                    candidates.append(href)
             if found:
                 break
     finally:

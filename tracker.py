@@ -46,7 +46,35 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 -- that degraded_sources READS the previous run's summary: a reader must not
 -- have to depend on a writer further down the same function having run first.
 CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, summary TEXT);
+CREATE TABLE IF NOT EXISTS employer_coverage (
+    company_key TEXT NOT NULL,
+    company TEXT NOT NULL,
+    careers_url TEXT NOT NULL DEFAULT '',
+    collection_method TEXT NOT NULL DEFAULT 'manual',
+    collection_status TEXT NOT NULL DEFAULT 'unchecked',
+    evidence TEXT NOT NULL DEFAULT '',
+    last_checked TEXT,
+    jobs_seen INTEGER NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (company_key, careers_url)
+);
+CREATE TABLE IF NOT EXISTS job_provenance (
+    uid TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (uid, source)
+);
 """
+
+
+_JOB_COLUMNS = {
+    "role_family": "TEXT NOT NULL DEFAULT ''",
+    "opportunity_type": "TEXT NOT NULL DEFAULT 'job'",
+    "eligibility": "TEXT NOT NULL DEFAULT 'confirmed'",
+    "eligibility_reason": "TEXT NOT NULL DEFAULT ''",
+    "student_compatible": "INTEGER NOT NULL DEFAULT 0",
+    "external_id": "TEXT NOT NULL DEFAULT ''",
+}
 
 
 def connect(path=None) -> sqlite3.Connection:
@@ -55,10 +83,17 @@ def connect(path=None) -> sqlite3.Connection:
     conn = sqlite3.connect(path or DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    # SQLite only supports additive migrations. Existing job history and the
+    # user's application statuses therefore survive the catalogue expansion.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for name, definition in _JOB_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+    conn.commit()
     return conn
 
 
-def load_profile(profile_path=None, derived_path=None) -> dict:
+def load_profile(profile_path=None, derived_path=None, *, include_derived=True) -> dict:
     """profile.yaml is the complete, hand-set config. A CV-generated
     derived.yaml, if present, overrides ONLY the DERIVED_KEYS allowlist -
     unknown keys in it are ignored, so no CV can touch the exclusions or
@@ -67,7 +102,7 @@ def load_profile(profile_path=None, derived_path=None) -> dict:
     profile_path = profile_path or PROFILE_PATH
     derived_path = derived_path or DERIVED_PATH
     p = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
-    if Path(derived_path).exists():
+    if include_derived and Path(derived_path).exists():
         d = yaml.safe_load(Path(derived_path).read_text(encoding="utf-8")) or {}
         for k in DERIVED_KEYS:
             if k in d:
@@ -85,6 +120,9 @@ class Filter:
         c = lambda pats: [re.compile(p, re.I) for p in pats]  # noqa: E731
         self.topic_must = c(profile.get("topic_must_match", []))
         self.topic_must_weak = c(profile.get("topic_must_match_weak", []))
+        self.role_families = {
+            name: c(patterns) for name, patterns in (profile.get("role_families") or {}).items()
+        }
         self.topic_never = c(profile.get("topic_never_match", []))
         self.topic_never_body = c(profile.get("topic_never_match_body", []))
         self.sen_reject_title = c(profile.get("seniority_reject_title", []))
@@ -108,144 +146,158 @@ class Filter:
                           for k, v in self.skill_weights.items()]
         self.bonus = profile.get("score_bonus", {})
 
-    def evaluate(self, j: dict) -> tuple[bool, float, str]:
-        """Returns (keep, score, reject_reason)."""
-        # NFC first, or a decomposed Turkish character defeats every pattern
-        # below: "Yapay Zeka \u0130\u00e7erik \u00dcreticisi" was rejected in its composed
-        # form and KEPT when the same string arrived with combining accents.
-        # Boards do emit both. Normalize once here rather than per pattern.
+    @staticmethod
+    def _text(j: dict) -> tuple[str, str, str, str, str]:
         n = lambda s: unicodedata.normalize("NFC", s or "")  # noqa: E731
         title = n(j.get("title"))
         desc = n(j.get("description"))
         loc = n(j.get("location"))
         workplace = (j.get("workplace") or "").lower()
-        blob = f"{title} {desc}"
+        return title, desc, loc, workplace, f"{title} {desc}"
 
+    def _role_family(self, title: str, desc: str) -> str:
+        """Use the role title as the primary evidence.
+
+        A careers page's marketing copy often says AI, cloud, or data for every
+        vacancy. Looking for technical words only in the title prevents an HR
+        role on an AI company page becoming a software vacancy.
+        """
+        for family, patterns in self.role_families.items():
+            if any(rx.search(title) for rx in patterns):
+                return family
+        # Graduate programmes can have generic titles, but must say that the
+        # programme itself is technical in its description.
+        graduate = re.search(r"graduate|new grad|yeni mezun|genc yetenek|genç yetenek", title, re.I)
+        technical = re.search(r"software|yazılım|computer|bilgisayar|data|veri|cloud|bulut|cyber|güvenlik|security|engineering|mühendis", desc, re.I)
+        return "graduate_programme" if graduate and technical else ""
+
+    @staticmethod
+    def _opportunity_type(title: str, desc: str) -> str:
+        text = f"{title} {desc}"
+        if re.search(r"\b(intern|internship|stajyer?|staj)\b", text, re.I):
+            return "internship"
+        if re.search(r"part[ -]?time|yar[ıi] zamanl[ıi]", text, re.I):
+            return "part_time"
+        if re.search(r"graduate program|graduate programme|new grad|yeni mezun|management trainee|young talent|genc yetenek|genç yetenek", text, re.I):
+            return "graduate_programme"
+        if re.search(r"research (engineer|assistant|scientist)|araştırma (mühendis|görevlisi)|arastirma (muhendis|gorevlisi)", text, re.I):
+            return "research"
+        return "job"
+
+    @staticmethod
+    def _requires_over_three_years(desc: str) -> bool:
+        """Only hard requirements count; preferences and an upper range do not."""
+        requirement = re.compile(
+            r"(?:minimum(?: of)?|at least|en az|requires?|required|must have|zorunlu|tercihen).{0,45}?"
+            r"\b(\d{1,2})\+?(?:\s*[-–]\s*\d{1,2})?\s*(?:years?|yrs?|y[ıi]l)\b", re.I)
+        trailing_requirement = re.compile(
+            r"\b(\d{1,2})\+?(?:\s*[-–]\s*\d{1,2})?\s*(?:years?|yrs?|y[ıi]l)"
+            r".{0,50}?(?:experience|deneyim|tecr[uü]be).{0,35}?(?:required|zorunlu|must|requires?)", re.I)
+        for match in requirement.finditer(desc):
+            if match.group(0).lower().startswith("tercihen"):
+                continue
+            if int(match.group(1)) > 3:
+                return True
+        for match in trailing_requirement.finditer(desc):
+            if int(match.group(1)) > 3:
+                return True
+        return False
+
+    def _location(self, loc: str, workplace: str, blob: str) -> tuple[str, str]:
+        city_ok = any(rx.search(loc) for rx in self.loc_city)
+        non_istanbul = any(rx.search(loc) for rx in self.loc_reject_city)
+        country_ok = any(rx.search(loc) for rx in self.loc_country)
+        remote = workplace == "remote" or any(rx.search(loc) for rx in self.loc_remote_hint)
+        hard_remote_reject = any(rx.search(blob) or rx.search(loc) for rx in self.remote_elig_reject)
+
+        if remote:
+            if hard_remote_reject or (not city_ok and any(rx.search(loc) for rx in self.remote_reject)):
+                return "ineligible", "Remote role has an incompatible residency or work-authorisation requirement."
+            if city_ok or country_ok:
+                return "confirmed", "Remote role explicitly lists Istanbul or Turkey."
+            # EMEA/worldwide is useful, but it does not prove Turkish payroll,
+            # tax, or work-authorisation eligibility.
+            return "review", "Remote eligibility for a resident of Turkey is not explicit."
+
+        if city_ok:
+            return "confirmed", "Location explicitly includes Istanbul."
+        if non_istanbul:
+            return "ineligible", "Onsite or hybrid location is outside Istanbul."
+        if country_ok:
+            return "review", "Turkey is listed but the onsite or hybrid city is not specified."
+        return "review", "The job location is missing or too vague to confirm Istanbul eligibility."
+
+    def classify(self, j: dict) -> dict:
+        """Return global collection eligibility and labels for one posting.
+
+        `confirmed` and `review` rows are stored. A CV never enters this method:
+        CV data only changes the later ranking score shown in the dashboard.
+        """
+        title, desc, loc, workplace, blob = self._text(j)
         if any(rx.search(title) for rx in self.topic_never):
-            return False, 0, "topic_never_match"
+            return {"keep": False, "reason": "topic_never_match"}
         if any(rx.search(blob) for rx in self.topic_never_body):
-            return False, 0, "topic_never_match_body"
-        topic_hit = any(rx.search(blob) for rx in self.topic_must) or \
-            any(rx.search(title) for rx in self.topic_must_weak)
-        if (self.topic_must or self.topic_must_weak) and not topic_hit:
-            return False, 0, "no_topic_match"
-
+            return {"keep": False, "reason": "topic_never_match_body"}
+        family = self._role_family(title, desc)
+        if not family:
+            return {"keep": False, "reason": "no_topic_match"}
         if any(rx.search(title) for rx in self.sen_reject_title):
-            return False, 0, "seniority_title"
-        if any(rx.search(desc) for rx in self.sen_reject_body):
-            return False, 0, "seniority_body"
+            return {"keep": False, "reason": "seniority_title"}
+        if self._requires_over_three_years(desc):
+            return {"keep": False, "reason": "seniority_body"}
+        eligibility, eligibility_reason = self._location(loc, workplace, blob)
+        if eligibility == "ineligible":
+            return {"keep": False, "reason": "location_reject"}
+        opportunity = self._opportunity_type(title, desc)
+        student = opportunity in {"internship", "part_time", "graduate_programme", "research"}
+        return {
+            "keep": True,
+            "role_family": family,
+            "opportunity_type": opportunity,
+            "eligibility": eligibility,
+            "eligibility_reason": eligibility_reason,
+            "student_compatible": student,
+        }
 
-        # Geography is read off the location field ONLY. Concatenating the title
-        # let a job NAME decide a job's geography in both directions: "Data
-        # Scientist, Istanbul Office Support" in Ankara passed the city gate
-        # (and so skipped the city reject entirely), while "Ankara Data Analyst
-        # | Remote" was rejected on its title. The title was still used as a
-        # fallback for an empty location until 2026-09-15, which had the same
-        # defect in miniature: "Istanbul Data Scientist" with no location at all
-        # cleared the city gate on its title. An absent location is unknown, and
-        # unknown is what the gates below are already built to handle - the
-        # 6 postings with an empty location today are all youthall, which
-        # establishes its country through turkey_only_sources instead.
-        geo = loc
-        city_ok = any(rx.search(geo) for rx in self.loc_city)
-        if not city_ok and any(rx.search(geo) for rx in self.loc_reject_city):
-            return False, 0, "city_reject"
-        country_ok = any(rx.search(geo) for rx in self.loc_country)
-        # A posting off a curated companies.yaml board ("{ats}:{token}" source
-        # ids, vs. a bare board name) comes from a company we already know is
-        # Istanbul-based - but only its VAGUE locations may be trusted to mean
-        # Istanbul. Trendyol's Lever board genuinely posts Amsterdam and Berlin
-        # roles, so a location naming a real foreign place is taken at its word.
-        src = j.get("source") or ""
-        curated_ok = ":" in src and (
-            country_ok or any(rx.search(geo) for rx in self.loc_no_geo)
-        )
-        # A Turkish-only board establishes the country by itself, so it relaxes
-        # the remote gate too. A curated companies.yaml entry does NOT: that
-        # list holds remote-first foreign employers whose "Remote" postings are
-        # exactly the ones that still need to name a real geography.
-        tr_source = src in self.tr_sources
-        # Trust the location string over the workplace field: boards routinely
-        # ship "Anywhere"/"Uzaktan" with workplace unset, and treating those as
-        # onsite let them bypass the remote gates entirely.
-        is_remote = workplace == "remote" or any(rx.search(loc) for rx in self.loc_remote_hint)
-        if is_remote:
-            # city_ok wins over the reject list: a multi-region posting that
-            # literally names Istanbul ("Remote - Istanbul, Dubai, London") is
-            # reachable, and rejecting it on one of its other cities dropped the
-            # highest-value remote hits we get.
-            if not city_ok and any(rx.search(geo) for rx in self.remote_reject):
-                return False, 0, "remote_location_reject"
-            # remote_reject reads the location string and loses to city_ok on
-            # purpose. Neither is enough on its own: "Remote - EMEA" whose body
-            # demands US work authorization was kept, and so was a location
-            # reading "Remote - Istanbul; US-only". These patterns read the
-            # BODY too and beat city_ok, because they state a hard legal
-            # requirement rather than list one more place.
-            if any(rx.search(blob) or rx.search(geo) for rx in self.remote_elig_reject):
+    def evaluate(self, j: dict) -> tuple[bool, float, str]:
+        """Compatibility wrapper for fetchers and legacy tests.
+
+        Collection uses :meth:`classify`, which keeps ambiguous postings in the
+        review queue. This historical predicate remains deliberately stricter
+        for callers that need a binary answer.
+        """
+        classified = self.classify(j)
+        if not classified["keep"]:
+            title, desc, loc, workplace, blob = self._text(j)
+            remote = workplace == "remote" or any(rx.search(loc) for rx in self.loc_remote_hint)
+            city_ok = any(rx.search(loc) for rx in self.loc_city)
+            if remote and city_ok and any(rx.search(blob) or rx.search(loc) for rx in self.remote_elig_reject):
                 return False, 0, "remote_eligibility_reject"
-            # A remote posting needs an explicit EMEA/Turkey signal to count -
-            # bare "Remote"/"Worldwide"/"Anywhere" with no geography is too
-            # ambiguous on aggregator boards (remoteok/weworkremotely/himalayas)
-            # to assume it's reachable from Istanbul. Not relaxed for curated
-            # companies either: the curated list holds remote-first foreign
-            # employers (GitLab/Canonical/Toggl) whose remote roles are exactly
-            # the ones that need a real geography before being trusted.
-            location_ok = city_ok or tr_source or any(rx.search(geo) for rx in self.remote_ok)
-        else:
-            # Onsite must be Istanbul itself; hybrid/unknown also accept a
-            # country-level match ("Turkey" with no city named). A curated
-            # known-Istanbul employer and a Turkey-only board both pass either
-            # way when the location field says nothing useful - tr_source has to
-            # be consulted on this branch too, or a techcareer posting whose
-            # workplace happens to read "onsite" is dropped while the identical
-            # "hybrid" one is kept.
-            location_ok = (city_ok or curated_ok or tr_source) if workplace == "onsite" else (
-                city_ok or curated_ok or tr_source or country_ok
-            )
-        if not location_ok:
+            if remote and any(rx.search(loc) for rx in self.remote_reject):
+                return False, 0, "remote_location_reject"
+            if remote and any(rx.search(blob) or rx.search(loc) for rx in self.remote_elig_reject):
+                return False, 0, "remote_eligibility_reject"
+            if any(rx.search(loc) for rx in self.loc_reject_city):
+                return False, 0, "city_reject"
+            return False, 0, classified["reason"]
+        title, desc, loc, workplace, _blob = self._text(j)
+        city_ok = any(rx.search(loc) for rx in self.loc_city)
+        country_ok = any(rx.search(loc) for rx in self.loc_country)
+        tr_source = (j.get("source") or "") in self.tr_sources
+        remote = workplace == "remote" or any(rx.search(loc) for rx in self.loc_remote_hint)
+        if remote and not city_ok and not tr_source and not any(rx.search(loc) for rx in self.remote_ok):
             return False, 0, "location_reject"
-
-        score = 0.0
-        for rx, _key, weight in self.skill_rx:
-            if rx.search(blob):
-                score += weight
-
-        # Awarded once, not once per matching pattern. The patterns are near-
-        # synonyms ("junior", "new grad", "entry-level", "associate") and they
-        # match the body too, so stacking them paid +88 to a title that stuffed
-        # five of them and +15 to any posting whose boilerplate merely mentioned
-        # running an internship program.
-        if any(rx.search(blob) for rx in self.sen_boost):
-            score += self.bonus.get("seniority_boost", 0)
-
-        # Same regex as the gate, which also accepts the dotless "ıstanbul" a
-        # plain .lower() comparison misses.
-        if any(rx.search(loc) for rx in self.loc_city):
-            score += self.bonus.get("istanbul", 0)
-        if workplace == "remote":
-            score += self.bonus.get("remote", 0)
-        elif workplace == "hybrid":
-            score += self.bonus.get("hybrid", 0)
-
-        posted = j.get("posted_at") or ""
-        if posted:
-            try:
-                # Sources disagree on date format: Lever/boards give
-                # "2026-09-01", hiringcafe gives "2026-09-08T08:58:09.491Z".
-                # fromisoformat handles both once "Z" is swapped for an offset.
-                posted_date = datetime.fromisoformat(posted.replace("Z", "+00:00")).date()
-                days = (datetime.now(timezone.utc).date() - posted_date).days
-                # 0 <= : a posting dated in the future gives a NEGATIVE day
-                # count, which satisfied "days <= 7" and took the top bonus.
-                if 0 <= days <= 7:
-                    score += self.bonus.get("posted_last_7_days", 0)
-                elif 0 <= days <= 30:
-                    score += self.bonus.get("posted_last_30_days", 0)
-            except ValueError:
-                pass
-
-        return True, round(score, 1), ""
+        if not remote and not city_ok:
+            # Legacy callers asked for a confirmed yes/no; vague rows are now
+            # retained by classify() as `review`, but remain false here.
+            curated = ":" in (j.get("source") or "")
+            if not loc and not tr_source and not curated:
+                return False, 0, "location_reject"
+            if country_ok and not (tr_source or curated):
+                return False, 0, "location_reject"
+            if loc and not country_ok and not tr_source and not (curated and any(rx.search(loc) for rx in self.loc_no_geo)):
+                return False, 0, "location_reject"
+        return True, self.score_only(j), ""
 
     def score_only(self, j) -> float:
         """The score `evaluate` computes, but with NO accept/reject gate. Used to
@@ -311,11 +363,15 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: list[dict], run_id: str) -> dict
             conn.execute(
                 """INSERT INTO jobs
                    (uid, company, title, url, location, workplace, posted_at, source,
-                    description, raw_seniority, score, status, first_seen, last_seen, run_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   description, raw_seniority, score, status, first_seen, last_seen, run_id,
+                    role_family, opportunity_type, eligibility, eligibility_reason, student_compatible, external_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (j["uid"], j["company"], j["title"], j["url"], j["location"],
                  j["workplace"], j["posted_at"], j["source"], j["description"],
-                 j["raw_seniority"], j["score"], "new", now, now, run_id),
+                 j["raw_seniority"], j["score"], "new", now, now, run_id,
+                 j.get("role_family", ""), j.get("opportunity_type", "job"),
+                 j.get("eligibility", "confirmed"), j.get("eligibility_reason", ""),
+                 int(bool(j.get("student_compatible", False))), j.get("external_id", "")),
             )
             inserted += 1
         else:
@@ -327,16 +383,136 @@ def upsert_jobs(conn: sqlite3.Connection, jobs: list[dict], run_id: str) -> dict
             conn.execute(
                 """UPDATE jobs SET company=?, title=?, url=?, location=?, workplace=?,
                    posted_at=?, source=?, description=?, raw_seniority=?, score=?,
-                   last_seen=?, run_id=?,
+                   last_seen=?, run_id=?, role_family=?, opportunity_type=?, eligibility=?,
+                   eligibility_reason=?, student_compatible=?, external_id=?,
                    status=CASE WHEN status='closed' THEN 'new' ELSE status END
                    WHERE uid=?""",
                 (j["company"], j["title"], j["url"], j["location"], j["workplace"],
                  j["posted_at"], j["source"], j["description"], j["raw_seniority"],
-                 j["score"], now, run_id, j["uid"]),
+                 j["score"], now, run_id, j.get("role_family", ""),
+                 j.get("opportunity_type", "job"), j.get("eligibility", "confirmed"),
+                 j.get("eligibility_reason", ""), int(bool(j.get("student_compatible", False))),
+                 j.get("external_id", ""), j["uid"]),
             )
             updated += 1
+        conn.execute(
+            "INSERT OR REPLACE INTO job_provenance (uid, source, source_url) VALUES (?,?,?)",
+            (j["uid"], j.get("source") or "", j.get("url") or ""),
+        )
     conn.commit()
     return {"inserted": inserted, "updated": updated}
+
+
+def rekey_legacy_jobs(conn: sqlite3.Connection) -> int:
+    """Repair rows created by an early external-ID key experiment.
+
+    Normal board jobs retain the original URL-and-title UID forever. If a
+    duplicate exists, copy the freshly collected details onto the historical
+    row while retaining an applied/interested/rejected/ignored status.
+    """
+    import sources  # local import avoids the tracker -> sources import cycle at module load
+
+    changed = 0
+    for row in conn.execute("SELECT * FROM jobs").fetchall():
+        external_id = row["external_id"] if "external_id" in row.keys() else ""
+        desired = sources.make_uid(row["company"], row["title"], row["url"], external_id)
+        if row["uid"] == desired:
+            continue
+        current = conn.execute("SELECT * FROM jobs WHERE uid=?", (desired,)).fetchone()
+        conn.execute(
+            "INSERT OR IGNORE INTO job_provenance (uid, source, source_url) "
+            "SELECT ?, source, source_url FROM job_provenance WHERE uid=?", (desired, row["uid"])
+        )
+        conn.execute("DELETE FROM job_provenance WHERE uid=?", (row["uid"],))
+        if current is None:
+            conn.execute("UPDATE jobs SET uid=? WHERE uid=?", (desired, row["uid"]))
+        else:
+            sticky = {"applied", "interested", "rejected", "ignored"}
+            preserved_status = current["status"] if current["status"] in sticky else row["status"]
+            conn.execute(
+                """UPDATE jobs SET company=?, title=?, url=?, location=?, workplace=?, posted_at=?,
+                   source=?, description=?, raw_seniority=?, score=?, last_seen=?, run_id=?,
+                   role_family=?, opportunity_type=?, eligibility=?, eligibility_reason=?,
+                   student_compatible=?, external_id=?, status=? WHERE uid=?""",
+                (row["company"], row["title"], row["url"], row["location"], row["workplace"],
+                 row["posted_at"], row["source"], row["description"], row["raw_seniority"],
+                 row["score"], row["last_seen"], row["run_id"], row["role_family"],
+                 row["opportunity_type"], row["eligibility"], row["eligibility_reason"],
+                 row["student_compatible"], external_id, preserved_status, desired),
+            )
+            conn.execute("DELETE FROM jobs WHERE uid=?", (row["uid"],))
+        changed += 1
+    conn.commit()
+    return changed
+
+
+def register_employer_coverage(conn: sqlite3.Connection, entries: list[dict]) -> None:
+    """Make every catalogue row visible even when it cannot be collected yet."""
+    for entry in entries:
+        boards = entry.get("boards") or [entry]
+        urls = []
+        for board in boards:
+            url = board.get("careers_url") or entry.get("careers_url") or ""
+            urls.append(url)
+            method = board.get("collection_method") or entry.get("collection_method") or "manual"
+            conn.execute(
+                """INSERT INTO employer_coverage
+                   (company_key, company, careers_url, collection_method, collection_status, evidence, detail)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(company_key, careers_url) DO UPDATE SET
+                     company=excluded.company, collection_method=excluded.collection_method,
+                     evidence=excluded.evidence""",
+                (entry["id"], entry["name"], url, method,
+                 board.get("collection_status") or entry.get("collection_status") or "unchecked",
+                 board.get("verification") or entry.get("verification") or "Catalogue entry awaiting a live check.",
+                 board.get("detail") or entry.get("detail") or ""),
+            )
+        # Normalisation may have once generated a fallback /careers URL before
+        # a verified board URL was added. Remove only an *unchecked* stale
+        # placeholder; completed/failed attempts remain audit history.
+        if urls:
+            conn.execute(
+                f"DELETE FROM employer_coverage WHERE company_key=? AND collection_status='unchecked' "
+                f"AND careers_url NOT IN ({','.join('?' * len(urls))})",
+                [entry["id"], *urls],
+            )
+    conn.commit()
+
+
+def update_employer_coverage(conn: sqlite3.Connection, entry: dict, board: dict, *,
+                             status: str, checked_at: str, jobs_seen: int = 0, detail: str = "") -> None:
+    url = board.get("careers_url") or entry.get("careers_url") or ""
+    conn.execute(
+        """UPDATE employer_coverage SET collection_status=?, last_checked=?, jobs_seen=?, detail=?
+           WHERE company_key=? AND careers_url=?""",
+        (status, checked_at, jobs_seen, detail, entry["id"], url),
+    )
+    conn.commit()
+
+
+def employer_coverage(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM employer_coverage ORDER BY company COLLATE NOCASE, careers_url"
+    ).fetchall()
+
+
+def reclassify_jobs(conn: sqlite3.Connection, filt: Filter) -> int:
+    """Apply new role/location labels without deleting a user's job history."""
+    changed = 0
+    for row in conn.execute("SELECT * FROM jobs").fetchall():
+        result = filt.classify(dict(row))
+        if result.get("keep"):
+            values = (result["role_family"], result["opportunity_type"], result["eligibility"],
+                      result["eligibility_reason"], int(result["student_compatible"]), row["uid"])
+        else:
+            values = (row["role_family"], row["opportunity_type"], "ineligible",
+                      result["reason"], row["student_compatible"], row["uid"])
+        conn.execute(
+            """UPDATE jobs SET role_family=?, opportunity_type=?, eligibility=?,
+               eligibility_reason=?, student_compatible=? WHERE uid=?""", values)
+        changed += 1
+    conn.commit()
+    return changed
 
 
 def mark_closed(conn: sqlite3.Connection, run_id: str,

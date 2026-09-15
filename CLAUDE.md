@@ -1,12 +1,14 @@
 # job_tracker — project scope
 
-A **panel-centric, single-user-per-clone** job radar for İstanbul / remote DS·ML·AI (and
-adjacent backend/cloud) roles. The React panel (`panel_server.py` + `web/`) is the primary UI;
+A **panel-centric, single-user-per-clone** job radar for İstanbul / Turkey-compatible remote
+Computer Engineering roles: software, data/AI, QA, cloud, security, embedded and research.
+The React panel (`panel_server.py` + `web/`) is the primary UI;
 everything is built around it. It is meant to be cloned and run by anyone — not only the owner.
 
 ## The flow
 
-1. `run.py fetch` populates a **globally-curated** pool into `jobs.db` (excluded roles never enter).
+1. `run.py fetch` populates a **globally-curated** pool into `jobs.db`; confirmed and review-needed
+   opportunities are retained with their location evidence while excluded roles never enter.
 2. A person opens the panel and **uploads their CV** (header → *CV yükle*, `.pdf/.txt/.md`).
 3. The CV is parsed (heuristic, no LLM) into a git-ignored `derived.yaml`; the panel then
    **re-ranks the whole pool by that person's own skills** on the next dashboard load. Nothing is

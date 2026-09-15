@@ -19,7 +19,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -75,12 +75,27 @@ class _RetryTimeout(httpx.HTTPTransport):
     source outright is a much worse outcome than one extra request.
     """
 
+    MIN_HOST_INTERVAL = 0.15
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._last_request: dict[str, float] = {}
+
     def handle_request(self, request):
+        host = request.url.host or ""
+        now = time.monotonic()
+        wait = self.MIN_HOST_INTERVAL - (now - self._last_request.get(host, 0))
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request[host] = time.monotonic()
         try:
             return super().handle_request(request)
         except httpx.TimeoutException:
-            # ponytail: one retry, no backoff. Add backoff if a source starts
-            # failing both attempts rather than just the first.
+            # One bounded retry is enough for the intermittent board stalls we
+            # see in practice; the short backoff avoids immediately repeating
+            # a congested request on the same host.
+            time.sleep(0.5)
+            self._last_request[host] = time.monotonic()
             return super().handle_request(request)
 
 
@@ -102,24 +117,29 @@ def strip_html(raw: str | None) -> str:
 
 
 def canonical_url(url: str) -> str:
-    """Drop query strings and fragments.
-
-    ATS links carry per-session tracking params (gh_jid, utm_*, lever-source).
-    Leaving them in would make the same posting hash differently on every run.
-    """
+    """Remove tracking parameters while preserving vacancy-identifying ones."""
     if not url:
         return ""
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/") or "/"
-    return urlunsplit((parts.scheme, parts.netloc.lower(), path, "", ""))
+    tracking = {"gclid", "fbclid", "mc_cid", "mc_eid", "lever-source", "source"}
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+             if not key.lower().startswith("utm_") and key.lower() not in tracking]
+    return urlunsplit((parts.scheme, parts.netloc.lower(), path, urlencode(sorted(query)), ""))
 
 
 def _norm_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
 
 
-def make_uid(company: str, title: str, url: str) -> str:
-    key = f"{(company or '').strip().lower()}|{_norm_title(title)}|{canonical_url(url)}"
+def make_uid(company: str, title: str, url: str, external_id: str = "") -> str:
+    # Keep the historical ordering for ordinary URLs. Existing job rows use
+    # this hash as their stable primary key, so changing it would turn every
+    # refresh into a new listing and lose the user's workflow history.
+    if external_id:
+        key = f"{(company or '').strip().lower()}|{external_id}|{_norm_title(title)}"
+    else:
+        key = f"{(company or '').strip().lower()}|{_norm_title(title)}|{canonical_url(url)}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -163,12 +183,12 @@ def parse_dt(value) -> str:
 
 
 def job(company, title, url, *, location="", posted_at="", source="",
-        description="", raw_seniority="", workplace="") -> dict:
+        description="", raw_seniority="", workplace="", external_id="") -> dict:
     title = (title or "").strip()
     company = (company or "").strip()
     url = (url or "").strip()
     return {
-        "uid": make_uid(company, title, url),
+        "uid": make_uid(company, title, url, external_id),
         "company": company,
         "title": title,
         "url": url,
@@ -185,6 +205,7 @@ def job(company, title, url, *, location="", posted_at="", source="",
         # which used to be a TypeError here that killed that whole fetcher.
         "description": (description or "")[:8000],
         "raw_seniority": raw_seniority,
+        "external_id": (external_id or "").strip(),
     }
 
 
@@ -498,6 +519,120 @@ def fetch_workday(token, company, c):
     return out
 
 
+def _walk_json_ld(value):
+    if isinstance(value, list):
+        for item in value:
+            yield from _walk_json_ld(item)
+    elif isinstance(value, dict):
+        if value.get("@type") == "JobPosting" or "JobPosting" in (value.get("@type") or []):
+            yield value
+        for item in value.get("@graph", []):
+            yield from _walk_json_ld(item)
+
+
+def _text_values(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _text_values(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _text_values(item)]
+    return []
+
+
+def fetch_html_jobs(url: str, company: str, source: str, c: httpx.Client,
+                    *, detail_limit: int = 60) -> list[dict]:
+    """Public HTML fallback for ATSs without a stable unauthenticated API.
+
+    JSON-LD is preferred because it carries the complete JobPosting schema.
+    For portals that only expose cards, follow public vacancy links and use the
+    detail page body. A deliberately bounded detail walk cannot be mistaken for
+    a complete source: `note_truncated` protects the closing sweep.
+    """
+    response = c.get(url)
+    response.raise_for_status()
+    tree = HTMLParser(response.text)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for script in tree.css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(script.text())
+        except (TypeError, ValueError):
+            continue
+        for item in _walk_json_ld(data):
+            title = item.get("title") or item.get("name") or ""
+            posting_url = item.get("url") or url
+            ident = item.get("identifier") or ""
+            if isinstance(ident, dict):
+                ident = ident.get("value") or ident.get("name") or ""
+            location = item.get("jobLocation") or item.get("applicantLocationRequirements") or ""
+            if isinstance(location, (list, dict)):
+                location = " ".join(_text_values(location))
+            out.append(job(company, title, posting_url, location=str(location),
+                           posted_at=parse_dt(item.get("datePosted")), source=source,
+                           description=strip_html(item.get("description")),
+                           workplace=guess_workplace(str(location), str(item.get("jobLocationType") or "")),
+                           external_id=str(ident)))
+            seen.add(canonical_url(posting_url))
+    if out:
+        return out
+
+    links = []
+    for anchor in tree.css("a[href]"):
+        href = urljoin(url, anchor.attributes.get("href", ""))
+        label = " ".join(anchor.text(separator=" ").split())
+        path = urlsplit(href).path.lower()
+        if (not href.startswith(("http://", "https://")) or canonical_url(href) in seen
+                or len(label) < 4 or len(label) > 160
+                or not re.search(r"job|position|career|ilan|vacanc|role", path, re.I)):
+            continue
+        seen.add(canonical_url(href))
+        links.append((label, href))
+    if len(links) > detail_limit:
+        note_truncated(source, detail_limit, len(links), detail_limit)
+        links = links[:detail_limit]
+    for title, detail_url in links:
+        detail = c.get(detail_url)
+        detail.raise_for_status()
+        detail_tree = HTMLParser(detail.text)
+        body = strip_html(detail_tree.body.text(separator=" ") if detail_tree.body else detail.text)
+        # Nearby visible text is more reliable than inferring a city from a
+        # careers-site headquarters footer, so leave unknown locations unknown.
+        out.append(job(company, title, detail_url, source=source, description=body,
+                       workplace=guess_workplace(body)))
+    return out
+
+
+def fetch_careers_page(token, company, c, board=None):
+    url = (board or {}).get("careers_url") or f"https://www.careers-page.com/{token}"
+    return fetch_html_jobs(url, company, f"careers-page:{token}", c)
+
+
+def fetch_manatal(token, company, c, board=None):
+    url = (board or {}).get("careers_url") or f"https://www.careers-page.com/{token}"
+    return fetch_html_jobs(url, company, f"manatal:{token}", c)
+
+
+def fetch_jobvite(token, company, c, board=None):
+    url = (board or {}).get("careers_url") or f"https://jobs.jobvite.com/{token}/jobs"
+    return fetch_html_jobs(url, company, f"jobvite:{token}", c)
+
+
+def fetch_successfactors(token, company, c, board=None):
+    url = (board or {}).get("careers_url") or (token if token.startswith("http") else "")
+    if not url:
+        raise ValueError("successfactors requires a public careers_url")
+    return fetch_html_jobs(url, company, f"successfactors:{token}", c)
+
+
+def fetch_custom(token, company, c, board=None):
+    url = (board or {}).get("careers_url") or token
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("custom portal requires a public careers_url")
+    source = (board or {}).get("source") or f"custom:{company.lower().replace(' ', '-') }"
+    return fetch_html_jobs(url, company, source, c)
+
+
 ATS_FETCHERS = {
     "greenhouse": fetch_greenhouse,
     "lever": fetch_lever,
@@ -509,6 +644,11 @@ ATS_FETCHERS = {
     "teamtailor": fetch_teamtailor,
     "bamboohr": fetch_bamboohr,
     "workday": fetch_workday,
+    "careers-page": fetch_careers_page,
+    "manatal": fetch_manatal,
+    "successfactors": fetch_successfactors,
+    "jobvite": fetch_jobvite,
+    "custom": fetch_custom,
 }
 
 
@@ -519,7 +659,15 @@ def fetch_company(entry: dict, c: httpx.Client) -> list[dict]:
     fetcher = ATS_FETCHERS.get(ats)
     if fetcher is None:
         raise ValueError(f"unknown ats {ats!r} for {entry.get('name')}")
-    return fetcher(token, entry["name"], c)
+    try:
+        return fetcher(token, entry["name"], c, entry)
+    except TypeError as exc:
+        # Established API adapters deliberately retain their concise
+        # (token, company, client) signatures; fallback portals also receive
+        # their catalogue metadata for public careers URLs.
+        if "positional" not in str(exc):
+            raise
+        return fetcher(token, entry["name"], c)
 
 
 # ----------------------------------------------------------- group B: job boards

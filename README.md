@@ -1,6 +1,9 @@
 # job_tracker
 
-Istanbul / remote DS-ML-AI job listings aggregator. Fetches from ~14 sources,
+Istanbul engineering job radar for Computer Engineering graduates and master's
+students. It finds software, data/AI, QA, cloud, security, embedded and
+research opportunities, then separates confirmed Istanbul/Turkey matches from
+roles needing location review. It fetches from public boards and careers pages,
 filters + scores against a profile, renders a static HTML report. Includes a
 no-LLM CV parser (tailors matching to your skills) and a LaTeX CV builder that
 tailors your CV to a specific job post.
@@ -9,6 +12,8 @@ tailors your CV to a specific job post.
 
 ```bash
 uv sync
+# Optional once-only browser support for JavaScript careers portals:
+uv sync --extra browser && uv run playwright install chromium
 cp cv/master.example.yaml cv/master.yaml   # then fill with your real CV content
 ```
 
@@ -17,7 +22,9 @@ CV parsing needs `pdftotext` (poppler); the CV builder needs `xelatex` (MacTeX /
 ## Commands
 
 ```bash
-uv run python run.py fetch        # fetch + score jobs into jobs.db
+uv run python run.py fetch        # full fetch + score jobs into jobs.db
+uv run python run.py fetch --http-only  # fast API/HTML-only fetch; browser pages remain unchecked
+uv run python run.py audit        # refresh coverage rows and reclassify stored history without fetching
 uv run python run.py report       # write report.html (open it)
 uv run python run.py panel        # serve the interactive local panel
 uv run python run.py selftest     # run the assert-based test suite
@@ -49,6 +56,13 @@ per-clone: each person runs their own clone and uploads their own CV.
 `cv parse` writes a git-ignored `derived.yaml` that overrides only an allowlisted subset of the
 profile (skills/topics/seniority boost). Exclusions, geography, remote and hard-seniority rules stay
 in `profile.yaml` and are never touched by a CV.
+
+## Coverage and eligibility
+
+The panel keeps confirmed Istanbul/Turkey roles in **Aktif**. **İncele** holds
+remote and vague-location jobs with the reason Turkey eligibility cannot yet be
+confirmed. Its coverage table lists every catalogued employer and its latest
+collection status: complete, empty, partial, blocked, failed, or unchecked.
 
 > **ATS:** `cv build` adds a "Key Skills for this Role" section listing the job's own
 > keyword spellings for skills you already have (intersection only — it never invents a skill).

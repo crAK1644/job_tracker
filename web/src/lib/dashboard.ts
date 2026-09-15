@@ -1,5 +1,5 @@
 export type JobStatus = 'new' | 'interested' | 'applied' | 'rejected' | 'ignored' | 'closed'
-export type Scope = 'active' | 'archive'
+export type Scope = 'active' | 'review' | 'archive'
 export type SortOrder = 'score' | 'newest' | 'company'
 
 export interface Job {
@@ -13,6 +13,11 @@ export interface Job {
   source: string
   description: string
   rawSeniority: string
+  roleFamily: string
+  opportunityType: string
+  eligibility: 'confirmed' | 'review' | 'ineligible'
+  eligibilityReason: string
+  studentCompatible: boolean
   score: number
   status: JobStatus
   firstSeen: string
@@ -31,8 +36,21 @@ export interface Dashboard {
   archiveStatuses: JobStatus[]
   errors: string[]
   sources: Record<string, number>
+  coverage: Coverage[]
   cv: { active: boolean; skillCount: number }
   links: { linkedin: Link[]; kariyer: Link[] }
+}
+
+export interface Coverage {
+  companyKey: string
+  company: string
+  careersUrl: string | null
+  collectionMethod: string
+  collectionStatus: string
+  evidence: string
+  lastChecked: string
+  jobsSeen: number
+  detail: string
 }
 
 interface Filters {
@@ -40,6 +58,8 @@ interface Filters {
   query: string
   workplace: string
   source: string
+  roleFamily: string
+  opportunityType: string
   status: string
   sort: SortOrder
 }
@@ -65,10 +85,14 @@ const active = new Set<JobStatus>(['new', 'interested', 'applied'])
 export function filterJobs(jobs: Job[], filters: Filters): Job[] {
   const query = filters.query.trim().toLocaleLowerCase('tr-TR')
   return jobs
-    .filter((job) => filters.scope === 'active' ? active.has(job.status) : !active.has(job.status))
-    .filter((job) => !query || [job.company, job.title, job.location, job.source, ...job.matchedSkills].join(' ').toLocaleLowerCase('tr-TR').includes(query))
+    .filter((job) => filters.scope === 'active' ? active.has(job.status) && job.eligibility === 'confirmed'
+      : filters.scope === 'review' ? active.has(job.status) && job.eligibility === 'review'
+        : !active.has(job.status))
+    .filter((job) => !query || [job.company, job.title, job.location, job.source, job.roleFamily, job.opportunityType, ...job.matchedSkills].join(' ').toLocaleLowerCase('tr-TR').includes(query))
     .filter((job) => filters.workplace === 'all' || job.workplace === filters.workplace)
     .filter((job) => filters.source === 'all' || job.source === filters.source)
+    .filter((job) => filters.roleFamily === 'all' || job.roleFamily === filters.roleFamily)
+    .filter((job) => filters.opportunityType === 'all' || job.opportunityType === filters.opportunityType)
     .filter((job) => filters.status === 'all' || job.status === filters.status)
     .sort((left, right) => {
       if (filters.sort === 'company') return left.company.localeCompare(right.company, 'tr')

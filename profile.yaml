@@ -1,4 +1,28 @@
 # Filtering + scoring rules. Edit this, not the Python.
+# ---------------------------------------------------------------- role families
+# The collection gate reads these against the *title*, not company boilerplate.
+# Each family is exposed in the panel so a Computer Engineering candidate can
+# compare software, platform, security and research opportunities directly.
+role_families:
+  software:
+    - '\bsoftware (engineer|developer|developer engineer)\b|\byazılım (mühendis|geliştirici|gelistirici)'
+    - '\b(backend|back[- ]?end|frontend|front[- ]?end|full[- ]?stack|web) (engineer|developer|mühendis|geliştirici|gelistirici)\b'
+    - '\b(mobile|ios|android) (engineer|developer|mühendis|geliştirici|gelistirici)\b'
+  data_ai:
+    - '\b(data|veri) (scientist|engineer|analyst|bilimci|mühendis|analist)\b|\bveri bilimci(si)?\b'
+    - '\b(machine learning|ml|ai|artificial intelligence|yapay zeka|yapay zekâ|nlp|computer vision) (engineer|scientist|mühendis|bilimci)\b'
+  quality:
+    - '\b(qa|quality assurance|test|testing|sdet) (engineer|automation|mühendis|otomasyon)\b'
+    - '\b(yazılım test|test otomasyon) (mühendis|uzman|specialist)\b'
+  platform_cloud:
+    - '\b(devops|sre|site reliability|platform|cloud|bulut) (engineer|mühendis|developer|geliştirici|gelistirici)\b'
+    - '\b(system|systems|infrastructure|network|ağ) (engineer|mühendis|administrator|yönetici|yonetici)\b'
+  security:
+    - '\b(cyber ?security|information security|application security|security|siber güvenlik|bilgi güvenliği) (engineer|analyst|mühendis|analist|specialist|uzman)\b'
+  embedded:
+    - '\b(embedded|firmware|gömülü|gomulu|avionics|aviyonik|robotics|robotik) (software |systems? )?(engineer|developer|mühendis|geliştirici|gelistirici)\b'
+  research:
+    - '\b(research (engineer|scientist|assistant)|araştırma (mühendis|görevlisi)|arastirma (muhendis|gorevlisi))\b'
 # All patterns are case-insensitive regexes matched against title / location / description.
 
 # ---------------------------------------------------------------- topic gate
@@ -292,6 +316,16 @@ score_bonus:
 # --------------------------------------------------------- LinkedIn shortcuts
 # Not scraped. Rendered as clickable search links at the top of the report.
 linkedin_keywords:
+  - Software Engineer
+  - Backend Engineer
+  - Frontend Developer
+  - Mobile Developer
+  - QA Engineer
+  - DevOps Engineer
+  - Cyber Security Analyst
+  - Embedded Software Engineer
+  - Computer Engineering Intern
+  - Graduate Program
   - Data Scientist
   - Machine Learning Engineer
   - AI Engineer

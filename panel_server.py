@@ -53,6 +53,11 @@ def _row_to_job(row, filt: tracker.Filter) -> dict:
         "source": row["source"] or "",
         "description": row["description"] or "",
         "rawSeniority": row["raw_seniority"] or "",
+        "roleFamily": row["role_family"] or "",
+        "opportunityType": row["opportunity_type"] or "job",
+        "eligibility": row["eligibility"] or "confirmed",
+        "eligibilityReason": row["eligibility_reason"] or "",
+        "studentCompatible": bool(row["student_compatible"]),
         # Re-scored live against the current profile (profile.yaml + the user's
         # derived.yaml if a CV was uploaded), NOT the value frozen at fetch time.
         # score_only never gates, so an uploaded CV re-ranks the pool without any
@@ -102,6 +107,7 @@ def create_app(
         try:
             run_id, summary = _latest_run(conn)
             rows = conn.execute("SELECT * FROM jobs").fetchall()
+            coverage_rows = tracker.employer_coverage(conn)
         finally:
             conn.close()
 
@@ -124,6 +130,17 @@ def create_app(
             "archiveStatuses": sorted(ARCHIVE_STATUSES),
             "errors": errors,
             "sources": summary.get("per_source") or {},
+            "coverage": [
+                {
+                    "companyKey": row["company_key"], "company": row["company"],
+                    "careersUrl": safe_external_url(row["careers_url"]),
+                    "collectionMethod": row["collection_method"],
+                    "collectionStatus": row["collection_status"],
+                    "evidence": row["evidence"], "lastChecked": row["last_checked"] or "",
+                    "jobsSeen": row["jobs_seen"], "detail": row["detail"],
+                }
+                for row in coverage_rows
+            ],
             "cv": {
                 "active": derived_file.exists(),
                 # When a CV is loaded, profile.skill_weights IS the CV's aliases
