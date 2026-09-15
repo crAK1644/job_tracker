@@ -1,0 +1,27 @@
+% Job-tailored CV template. Compiled with xelatex (fontspec) so Turkish
+% characters (ç ğ ş ı ö ü) render. The angle-bracket placeholders below are
+% filled once by cv.py:build_cv; that delimiter never collides with LaTeX's
+% $ {} so user text stays literal.
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+% No \setmainfont: fontspec defaults to Latin Modern, installed with every TeX
+% distribution and covering Turkish (ç ğ ş ı ö ü İ). To change the face add e.g.
+% \setmainfont{Georgia} - any system font with Turkish glyphs works, but a name
+% xelatex cannot resolve fails the whole compile.
+\setlist[itemize]{leftmargin=1.2em, itemsep=1pt, topsep=2pt, parsep=0pt}
+\newcommand{\heading}[1]{\par\vspace{7pt}{\large\bfseries #1}\vspace{1pt}\hrule\vspace{5pt}}
+\setlength{\parindent}{0pt}
+\pagestyle{empty}
+\begin{document}
+{\Huge\bfseries <<NAME>>}\\[3pt]
+<<CONTACT>>
+\heading{Summary}
+<<SUMMARY>>
+\heading{Experience}
+<<EXPERIENCE>>
+\heading{Skills}
+<<SKILLS>>
+\end{document}

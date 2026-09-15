@@ -1,0 +1,35 @@
+# Example CV scaffold. Copy this to cv/master.yaml and fill with your real
+# content, then run `uv run python run.py cv build <uid>`. build_cv selects the
+# bullets most relevant to a job post (by the skills: tags) - it never invents text.
+name: Ayberk Karataban
+contact:
+  email: you@example.com
+  phone: ""
+  location: Istanbul, Turkey
+  links:
+    - {label: GitHub, url: https://github.com/yourhandle}
+    - {label: LinkedIn, url: https://linkedin.com/in/yourhandle}
+summary: >
+  Backend / ML engineer building production services and data pipelines.
+  Edit this summary to match how you pitch yourself.
+experiences:
+  - company: Example Corp
+    role: Software Engineer
+    dates: 2023 - Present
+    bullets:
+      - {text: "Built REST APIs in Java and Spring Boot serving 1M req/day.", skills: [java, spring boot, rest api]}
+      - {text: "Deployed microservices to AWS (EC2, S3) with Docker and Kubernetes.", skills: [aws, docker, kubernetes]}
+      - {text: "Designed PostgreSQL schemas and tuned slow queries.", skills: [postgresql, sql]}
+      - {text: "Built ETL pipelines with Airflow and Kafka.", skills: [airflow, kafka]}
+  - company: Prior Corp
+    role: Junior Developer
+    dates: 2021 - 2023
+    bullets:
+      - {text: "Trained ML models in PyTorch for text classification.", skills: [pytorch, nlp]}
+      - {text: "Wrote Python data-processing scripts with pandas.", skills: [python, pandas]}
+education:
+  - {school: Your University, degree: BSc Computer Engineering, dates: 2017 - 2021}
+skills:
+  Languages: [Python, Java, SQL]
+  Frameworks: [Spring Boot, FastAPI, PyTorch]
+  Cloud/DevOps: [AWS, Docker, Kubernetes]

@@ -1,0 +1,62 @@
+# Skill taxonomy read by cv.py:parse_cv. Each canonical skill lists the ALIASES
+# as they literally appear in job descriptions - cv parse emits every alias into
+# the derived skill_weights and topic_must_match, because the filter matches
+# skill_weights keys and topic_must_match regexes LITERALLY over the job text
+# (tracker.py Filter). So "amazon web services" and "ec2" must both be here, not
+# just the label "aws". Canonical labels/domain names are never emitted, only
+# aliases. weight reuses profile.yaml's 1-6 scale. domain drives which cluster
+# becomes topic_must_match (the dominant domain of the CV).
+#
+# Punctuation aliases (.NET, C++, C#) are matched by cv.py:boundary_for, not the
+# plain word-boundary regex - keep them spelled exactly as they appear.
+
+# ---- ML / data science
+python:      {aliases: [python], domain: ml, weight: 5}
+pytorch:     {aliases: [pytorch, torch], domain: ml, weight: 5}
+tensorflow:  {aliases: [tensorflow, keras], domain: ml, weight: 3}
+scikit-learn: {aliases: [scikit-learn, sklearn, scikit learn], domain: ml, weight: 4}
+pandas:      {aliases: [pandas], domain: ml, weight: 4}
+numpy:       {aliases: [numpy], domain: ml, weight: 3}
+llm:         {aliases: [llm, large language model, gpt, transformer, transformers], domain: ml, weight: 5}
+rag:         {aliases: [rag, retrieval augmented generation, retrieval-augmented], domain: ml, weight: 5}
+nlp:         {aliases: [nlp, natural language processing], domain: ml, weight: 4}
+mlops:       {aliases: [mlops, ml ops, model serving, mlflow], domain: ml, weight: 3}
+deep-learning: {aliases: [deep learning, neural network, neural networks, cnn, rnn, lstm], domain: ml, weight: 4}
+machine-learning: {aliases: [machine learning, ml engineer, ml engineering], domain: ml, weight: 4}
+computer-vision: {aliases: [computer vision, opencv, image classification, object detection], domain: ml, weight: 4}
+optimization: {aliases: [optimization, or-tools, constraint programming, linear programming], domain: ml, weight: 3}
+vector-db:   {aliases: [vector database, chromadb, pinecone, faiss, weaviate, qdrant], domain: ml, weight: 4}
+mcp:         {aliases: [model context protocol, mcp], domain: ml, weight: 3}
+
+# ---- backend
+java:        {aliases: [java], domain: backend, weight: 4}
+spring:      {aliases: [spring, spring boot, spring framework], domain: backend, weight: 4}
+kotlin:      {aliases: [kotlin], domain: backend, weight: 3}
+dotnet:      {aliases: ['.net', 'dotnet', 'asp.net', '.net core'], domain: backend, weight: 3}
+csharp:      {aliases: ['c#'], domain: backend, weight: 3}
+cplusplus:   {aliases: ['c++'], domain: backend, weight: 3}
+go:          {aliases: [golang], domain: backend, weight: 3}
+nodejs:      {aliases: [node.js, nodejs, express.js, nestjs], domain: backend, weight: 3}
+typescript:  {aliases: [typescript], domain: backend, weight: 2}
+fastapi:     {aliases: [fastapi], domain: backend, weight: 5}
+django:      {aliases: [django, flask], domain: backend, weight: 3}
+rest-api:    {aliases: [rest api, restful, graphql, grpc, microservice, microservices], domain: backend, weight: 3}
+
+# ---- data engineering
+sql:         {aliases: [sql, postgresql, postgres, mysql, mssql], domain: data, weight: 4}
+nosql:       {aliases: [nosql, mongodb, cassandra, dynamodb, redis], domain: data, weight: 3}
+spark:       {aliases: [spark, pyspark, apache spark, hadoop], domain: data, weight: 2}
+airflow:     {aliases: [airflow, apache airflow, dagster, prefect], domain: data, weight: 2}
+kafka:       {aliases: [kafka, apache kafka, rabbitmq], domain: data, weight: 2}
+etl:         {aliases: [etl, elt, data pipeline, data warehouse, dbt, snowflake], domain: data, weight: 2}
+
+# ---- cloud / devops
+aws:         {aliases: [aws, amazon web services, ec2, s3, lambda, eks], domain: cloud, weight: 2}
+gcp:         {aliases: [gcp, google cloud, bigquery], domain: cloud, weight: 2}
+azure:       {aliases: [azure, microsoft azure], domain: cloud, weight: 2}
+docker:      {aliases: [docker, containerization], domain: devops, weight: 3}
+kubernetes:  {aliases: [kubernetes, k8s], domain: devops, weight: 2}
+terraform:   {aliases: [terraform, ansible, pulumi], domain: devops, weight: 2}
+cicd:        {aliases: [ci/cd, jenkins, github actions, gitlab ci], domain: devops, weight: 2}
+git:         {aliases: [git], domain: devops, weight: 1}
+linux:       {aliases: [linux, bash, unix], domain: devops, weight: 1}

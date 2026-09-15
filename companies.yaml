@@ -1,0 +1,99 @@
+# company -> ATS board. `run.py discover` fills in ats/token for entries marked `ats: unknown`.
+# verified: true means a real board was fetched and its postings matched the company.
+# Set `enabled: false` to skip a company without deleting it.
+#
+# ats values: greenhouse | lever | ashby | workable | smartrecruiters | recruitee
+#             personio | teamtailor | bamboohr | workday | unknown
+# workday token format: "tenant|wd3|SiteName"
+
+companies:
+  # ---------------------------------------------------------- e-commerce / marketplace
+  - {name: Trendyol,       domain: trendyol.com,       ats: lever,    token: trendyol,   verified: true,  group: ecommerce}
+  - {name: Hepsiburada,    domain: hepsiburada.com,    ats: unknown,  token: null,       group: ecommerce}
+  # Discovery (2026-09-14) found real tokens for these two, but on ATS families
+  # with no sources.fetch_<ats> yet: Getir -> careers-page:getir-2 (Manatal),
+  # Sahibinden -> successfactors:47bdcda0. Left as unknown so nothing fetches a
+  # token that has never been verified against a live board.
+  - {name: Getir,          domain: getir.com,          ats: unknown,  token: null,       group: ecommerce}
+  - {name: Sahibinden,     domain: sahibinden.com,     ats: unknown,  token: null,       group: ecommerce}
+  - {name: Dolap,          domain: dolap.com,          ats: unknown,  token: null,       group: ecommerce}
+  - {name: Modanisa,       domain: modanisa.com,       ats: unknown,  token: null,       group: ecommerce}
+  # Genuine token, but the board holds a single non-technical posting - this is
+  # not where Ciceksepeti actually recruits. Re-run discovery for their real one.
+  - {name: Ciceksepeti,    domain: ciceksepeti.com,    ats: lever,  token: ciceksepeti,       verified: true, group: ecommerce}
+  - {name: n11,            domain: n11.com,            ats: unknown,  token: null,       group: ecommerce}
+  - {name: Vivense,        domain: vivense.com,        ats: unknown,  token: null,       group: ecommerce}
+  - {name: Armut,          domain: armut.com,          ats: unknown,  token: null,       group: ecommerce}
+
+  # ------------------------------------------------------------------------- gaming
+  - {name: Dream Games,    domain: dreamgames.com,     ats: lever,    token: dreamgames, verified: true,  group: gaming}
+  - {name: Peak,           domain: peak.com,           ats: unknown,  token: null,       group: gaming}
+  - {name: Rollic,         domain: rollicgames.com,    ats: unknown,  token: null,       group: gaming}
+  - {name: Gram Games,     domain: gramgames.com,      ats: unknown,  token: null,       group: gaming}
+  - {name: Spyke Games,    domain: spykegames.com,     ats: lever,  token: spyke-games,       verified: true, group: gaming}
+  - {name: Bigger Games,   domain: biggergames.com,    ats: ashby,  token: biggergames,       verified: true, group: gaming}
+  - {name: Ace Games,      domain: acegames.com,       ats: unknown,  token: null,       group: gaming}
+  - {name: Panteon,        domain: panteon.games,      ats: unknown,  token: null,       group: gaming}
+
+  # --------------------------------------------------------------- fintech / banking
+  - {name: iyzico,         domain: iyzico.com,         ats: lever,    token: iyzico,     verified: true,  group: fintech}
+  - {name: Papara,         domain: papara.com,         ats: unknown,  token: null,       group: fintech}
+  - {name: Param,          domain: param.com.tr,       ats: unknown,  token: null,       group: fintech}
+  - {name: Midas,          domain: getmidas.com,       ats: lever,  token: getmidas,       verified: true, group: fintech}
+  - {name: Colendi,        domain: colendi.com,        ats: unknown,  token: null,       group: fintech}
+  - {name: Ininal,         domain: ininal.com,         ats: unknown,  token: null,       group: fintech}
+  - {name: Paycell,        domain: paycell.com.tr,     ats: unknown,  token: null,       group: fintech}
+  - {name: Multinet Up,    domain: multinet.com.tr,    ats: unknown,  token: null,       group: fintech}
+  - {name: Garanti BBVA,   domain: garantibbva.com.tr, ats: unknown,  token: null,       group: banking}
+  - {name: Yapi Kredi,     domain: yapikredi.com.tr,   ats: unknown,  token: null,       group: banking}
+  - {name: Akbank,         domain: akbank.com,         ats: unknown,  token: null,       group: banking}
+  - {name: Is Bankasi,     domain: isbank.com.tr,      ats: unknown,  token: null,       group: banking}
+  - {name: DenizBank,      domain: denizbank.com,      ats: unknown,  token: null,       group: banking}
+  - {name: QNB Turkiye,    domain: qnb.com.tr,         ats: unknown,  token: null,       group: banking}
+
+  # -------------------------------------------------------------------- tech / SaaS
+  - {name: Insider,        domain: useinsider.com,     ats: lever,  token: insiderone,       verified: true, group: saas}
+  - {name: Segmentify,     domain: segmentify.com,     ats: unknown,  token: null,       group: saas}
+  - {name: Prisync,        domain: prisync.com,        ats: unknown,  token: null,       group: saas}
+  - {name: Jotform,        domain: jotform.com,        ats: unknown,  token: null,       group: saas}
+  - {name: Commencis,      domain: commencis.com,      ats: unknown,  token: null,       group: saas}
+  - {name: OBSS,           domain: obss.tech,          ats: unknown,  token: null,       group: saas}
+  - {name: Etiya,          domain: etiya.com,          ats: unknown,  token: null,       group: saas}
+  - {name: Kartaca,        domain: kartaca.com,        ats: unknown,  token: null,       group: saas}
+  - {name: Logo Yazilim,   domain: logo.com.tr,        ats: unknown,  token: null,       group: saas}
+  - {name: Testinium,      domain: testinium.com,      ats: unknown,  token: null,       group: saas}
+  - {name: Dogus Teknoloji, domain: d-teknoloji.com.tr, ats: unknown, token: null,       group: saas}
+  - {name: Odine,          domain: odine.com,          ats: unknown,  token: null,       group: saas}
+
+  # ------------------------------------------------------------- telco / corporate
+  - {name: Turkcell,       domain: turkcell.com.tr,    ats: unknown,  token: null,       group: corporate}
+  - {name: Vodafone TR,    domain: vodafone.com.tr,    ats: unknown,  token: null,       group: corporate}
+  - {name: Turk Telekom,   domain: turktelekom.com.tr, ats: unknown,  token: null,       group: corporate}
+  - {name: Migros,         domain: migros.com.tr,      ats: unknown,  token: null,       group: corporate}
+  - {name: LC Waikiki,     domain: lcwaikiki.com,      ats: unknown,  token: null,       group: corporate}
+  - {name: DeFacto,        domain: defacto.com.tr,     ats: unknown,  token: null,       group: corporate}
+  - {name: Arcelik,        domain: arcelikglobal.com,  ats: unknown,  token: null,       group: corporate}
+  - {name: Ford Otosan,    domain: fordotosan.com.tr,  ats: unknown,  token: null,       group: corporate}
+  - {name: TAB Gida,       domain: tabgida.com.tr,     ats: unknown,  token: null,       group: corporate}
+
+  # ------------------------------------------------------------- mobility / travel
+  - {name: Marti,          domain: marti.tech,         ats: unknown,  token: null,       group: mobility}
+  - {name: Enuygun,        domain: enuygun.com,        ats: unknown,  token: null,       group: mobility}
+  - {name: Obilet,         domain: obilet.com,         ats: unknown,  token: null,       group: mobility}
+  - {name: BiTaksi,        domain: bitaksi.com,        ats: unknown,  token: null,       group: mobility}
+
+  # ------------------------------------------------------------------ defense / R&D
+  - {name: ASELSAN,        domain: aselsan.com.tr,     ats: unknown,  token: null,       group: defense}
+  - {name: HAVELSAN,       domain: havelsan.com.tr,    ats: unknown,  token: null,       group: defense}
+  - {name: TUBITAK BILGEM, domain: bilgem.tubitak.gov.tr, ats: unknown, token: null,     group: defense}
+  - {name: Baykar,         domain: baykartech.com,     ats: unknown,  token: null,       group: defense}
+  - {name: ROKETSAN,       domain: roketsan.com.tr,    ats: unknown,  token: null,       group: defense}
+
+  # ------------------------------------- remote-first, known to hire out of Turkiye
+  - {name: Toggl,          domain: toggl.com,          ats: unknown,  token: null,       group: remote_first}
+  - {name: Doist,          domain: doist.com,          ats: unknown,  token: null,       group: remote_first}
+  - {name: Canonical,      domain: canonical.com,      ats: unknown,  token: null,       group: remote_first}
+  - {name: GitLab,         domain: gitlab.com,         ats: unknown,  token: null,       group: remote_first}
+  - {name: Automattic,     domain: automattic.com,     ats: unknown,  token: null,       group: remote_first}
+  - {name: Hostinger,      domain: hostinger.com,      ats: unknown,  token: null,       group: remote_first}
+  - {name: Deel,           domain: deel.com,           ats: unknown,  token: null,       group: remote_first}

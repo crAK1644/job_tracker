@@ -1,0 +1,11 @@
+jobs.db
+report.html
+.venv/
+__pycache__/
+*.pyc
+derived.yaml
+cv/*.pdf
+*.pdf
+*.bak
+cv/master.yaml
+.DS_Store

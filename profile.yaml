@@ -1,0 +1,302 @@
+# Filtering + scoring rules. Edit this, not the Python.
+# All patterns are case-insensitive regexes matched against title / location / description.
+
+# ---------------------------------------------------------------- topic gate
+# A job must match at least one of these specific phrases anywhere (title or
+# description), OR one of the topic_must_match_weak patterns in its TITLE, or
+# it is dropped. The weak list is title-only on purpose: bare "AI"/"ML" show up
+# as marketing buzzwords in unrelated job descriptions (Growth, Sales, DevOps
+# postings mentioning "our AI-powered platform") constantly, so matching them
+# in the body alone is pure noise. In a title they're a real signal.
+#
+# Some of these phrases (machine learning, deep learning, data engineer/analyst,
+# artificial intelligence) also show up constantly in company boilerplate that
+# has nothing to do with the role itself ("we are the AI infrastructure company
+# for machine learning" on a plain backend posting) - so they live in the
+# TITLE-ONLY weak list below instead of here, even though they're specific
+# phrases. Only phrases nobody writes in a marketing paragraph stay blob-matched.
+topic_must_match:
+  - 'data scien|veri bilim'
+  - '\bmle\b|ml engineer|makine ogrenmesi muhendis'
+  - 'natural language processing'
+  - 'computer vision|goruntu isleme|görüntü işleme'
+  - '\bmlops\b'
+  - 'research engineer|research scientist'
+  - 'recommendation engine|recommender system'
+  - 'federated learning|knowledge distillation'
+
+topic_must_match_weak:
+  - '\bai\b'
+  - '\bml\b'
+  - '\bnlp\b'
+  # Title-only for the same reason as "machine learning" below: an LLM/GenAI
+  # mention in a body is now standard boilerplate on ordinary backend postings.
+  # techcareer's "Yazılım Geliştirme Uzmanı(.Net)" passed the blob gate on the
+  # body phrase "LLM servisleriyle entegrasyon" and outranked every real Data
+  # Scientist row - verified live 2026-09-14. Boundaries on gen-ai too: bare
+  # 'gen ai' matched "next-gen AI platform".
+  - 'language model|\bllm\b|\bgenai\b|\bgen[- ]ai\b'
+  - 'personalization'
+  - 'artificial intelligence|yapay zeka|yapay zekâ'
+  - 'machine learning|makine ogrenme|makine öğrenme'
+  - 'deep learning|derin ogrenme|derin öğrenme'
+  - 'data engineer|veri muhendis|veri mühendis'
+  - 'data analyst|veri analist'
+  # "arastirmaci/araştırmacı" alone (not paired with "research
+  # engineer/scientist") is title-only: in a body it's routinely just a
+  # personality-trait adjective in Turkish job-ad boilerplate ("fikir
+  # geliştirme konusunda güçlü, araştırmacı ve yeniliklere açık" = "strong at
+  # idea generation, inquisitive, and open to innovation") - verified live via
+  # techcareer.net 2026-09-14, no relation to an actual research role.
+  - 'arastirmaci|araştırmacı'
+
+# Titles that are clearly off-target even if the body mentions AI.
+#
+# Two lessons are baked into the patterns below, both verified live 2026-09-14:
+#
+# 1. Bare substrings over-reject. 'satis' matched "Data Scientist, Guest
+#    Satisfaction"; bare 'creative'/'brand'/'annotat' killed "Generative AI
+#    Engineer, Creative Tools", "ML Engineer, Brand Safety" and "ML Engineer,
+#    Annotation Infrastructure" - all genuine target roles. Those tokens name
+#    real ML problem domains, so they are qualified with the gig-work noun that
+#    actually disqualifies a posting ("brand manager", not "brand").
+# 2. The rows were English-only while techcareer/youthall - the main Istanbul
+#    sources - post in Turkish. "İçerik Üreticisi (AI)", "Metin Yazarı (Yapay
+#    Zeka)", "AI Tasarımcı" and "Yapay Zeka Veri Etiketleme Uzmanı" were all
+#    being KEPT. Every row now carries its Turkish stems.
+topic_never_match:
+  - 'sales|\bsatis\b|\bsatış\b|account executive|business development'
+  - 'recruit|talent acquisition|\bhr\b|insan kaynak'
+  # "marketer" is not a substring of "marketing" - "AI Marketer" was kept.
+  - 'marketing|marketer|content writer|copywriter|social media|\bcomms\b|communications'
+  - 'pazarlama|reklam|sosyal medya|\biletisim\b|\biletişim\b'
+  # Qualified on both sides: "Müşteri Analitiği Veri Bilimcisi" (customer
+  # analytics DS) is a standard Istanbul e-commerce role, not a support job.
+  - 'customer (support|success|service)|m[uü][sş]teri (hizmet|destek|ili[sş]ki|temsilci|deneyim)'
+  - 'accountant|finance manager|muhasebe'
+  - 'designer|\bux\b|\bui\b designer|grafiker|grafik tasarim|grafik tasarım|tasarımcı|tasarimci'
+  - 'content (producer|creator|strateg|special|editor)|copy ?writ|video (editor|edit[öo]r|produc|montaj)|montaj (uzman|elaman|special)|creative (director|producer|strateg|lead|special)|brand (manager|special|strateg|ambassador|marketing)|influencer'
+  - 'i[çc]erik (üretici|uretici|editör|editor|uzman|yazar|stratej)|metin yaz|seslendirme'
+  # "Video Editörü" and "Anotasyon Uzmanı" both reached the report on 2026-09-15.
+  # The Turkish role noun is the head word, so it is matched on its own rather
+  # than only in the "video editor" order English uses.
+  # Qualified like the English annotation rules above: a bare 'anotasyon'
+  # rejected "Machine Learning Engineer, Anotasyon Altyapısı", which is an
+  # annotation-INFRASTRUCTURE role and exactly the kind of job wanted.
+  - 'edit[öo]r[üu]?\b|anotasyon (uzman|eleman|operat|special)|veri anotasyon\b|etiketleme (uzman|eleman|operat)'
+  # Matched as the role noun, never as the subject matter: "AI Content
+  # Moderator" was kept with score 13, while "Content Moderation ML
+  # Engineer" and "Trust & Safety ML Engineer" build the models and stay.
+  - '\bmoderat[oö]r|moderasyon (uzman|eleman|analist)'
+  - 'performance marketing|growth marketer|\bseo\b|\bsem\b'
+  # Gig/microwork vocabulary is much wider than "annotate": a bare "Model
+  # Evaluator", "LLM Output Reviewer", "AI Prompt Writer" and "AI Data Labeler"
+  # all sailed through. Each is qualified so that the platform-engineering
+  # version of the same words survives ("Annotation Infrastructure", "Data
+  # Labeling Platform Engineer", "Prompt Engineer").
+  - '\bannotator\b|annotation (specialist|associate|analyst|expert|lead)|data label(er\b|ing (specialist|associate|expert|analyst))|veri etiketleme (uzman|eleman|special)'
+  - 'data entry|veri giri[sş]|transcrib|\brater\b|(response|model|output) (analyst|evaluator|reviewer)|ai train(er|ing)|prompt (writer|yazar)|\bfreelance\b'
+  - '\b(ai|a\.i\.|llm|gen ?ai|yapay zeka) (evaluator|rater|reviewer|annotator|labeler)\b'
+  - 'genel basvuru|genel başvuru|general application|talent (pool|community)|speculative'
+
+# Matched against title + description, not title-only like the list above.
+# A body mention is much weaker evidence than a title one, so keep this short
+# and high-confidence - this is what catches "AI Content Producer" (Dream
+# Games), whose disqualifying signal ("produce AI videos internally for
+# marketing purposes") lives only in the body.
+topic_never_match_body:
+  - 'for marketing purposes|content marketing|social media (content|campaign)'
+  # Was 'you will (create|produce) (content|videos)', which rejected a genuine
+  # "Generative AI Engineer" whose body read "you will create content generation
+  # systems using diffusion models". The marketing qualifier is what makes it a
+  # content job; "content" as a bare noun is ordinary ML vocabulary.
+  - 'you will (create|produce|edit) (marketing|promotional|social|brand|editorial) (content|videos?|assets)'
+  - '(content|editorial|social media) calendar|content pipeline for (marketing|brand)'
+
+# ------------------------------------------------------------ seniority gate
+# Reject outright: too senior to be worth the application.
+seniority_reject_title:
+  - '\bsenior\b|\bsr\.?\b|\bkidemli\b|\bkıdemli\b'
+  - '\blead\b|\bleader\b|\btech lead\b'
+  - '\bprincipal\b|\bstaff\b|\bdistinguished\b'
+  - '\bhead of\b|\bdirector\b|\bchief\b|\bvp\b|\bc[teo]o\b'
+  - '\bmanager\b|\byonetici\b|\byönetici\b'
+  - '\barchitect\b|\bmimar\b'
+  - '\bii+\b$|\b[3-9]\b$'   # "Engineer III", "Engineer 4"
+
+# Reject if the body demands this much experience.
+# Two guards, both earned: the number must not be the upper half of a range
+# ("0-5 years of experience welcome" and "2-5 years but new grads encouraged"
+# were rejecting junior roles), and it must sit near the word experience
+# ("our company was founded 6 years ago" was too). Verified live 2026-09-14.
+seniority_reject_body:
+  - '(?<![\d-])([5-9]|1[0-9])\s*\+?\s*(years|yrs|yil|yıl)[^.]{0,40}(experience|deneyim|tecr[uü]be)'
+  - '(experience|deneyim|tecr[uü]be)[^.]{0,40}(?<![\d-])([5-9]|1[0-9])\s*\+?\s*(years|yrs|yil|yıl)'
+  - 'minimum of\s+([5-9]|1[0-9])\s*(years|yil|yıl)'
+  - 'en az\s+([5-9]|1[0-9])\s*(yil|yıl)'
+
+# Strong positives for a new grad / MSc student.
+seniority_boost:
+  - '\bintern(ship)?\b|\bstaj(yer)?\b'
+  - 'new grad|newgrad|yeni mezun|fresh grad'
+  - '\bjunior\b|\bjr\.?\b'
+  - '\bentry[ -]level\b|\bgiris seviye\b|\bgiriş seviye\b'
+  - '\bassociate\b'
+  - 'graduate program|management trainee|\bmt program\b|young talent|genc yetenek|genç yetenek'
+  - '\b(0|1|2)\s*-\s*[123]\s*(years|yil|yıl)'
+  - 'part[ -]?time|yari zamanli|yarı zamanlı'
+
+# ------------------------------------------------------------- location gate
+# Onsite must be Istanbul specifically - an onsite Ankara/Izmir posting that
+# merely says "Turkey" in its location string is not something he can commute
+# to. Remote/hybrid/unknown postings get the wider country-level match too.
+location_accept_city:
+  - 'istanbul|i̇stanbul|ıstanbul'
+
+location_accept_country:
+  - 'turkiye|türkiye|turkey|\btr\b'
+
+# Boards that carry Turkish postings only. The source itself establishes the
+# country, so a listing whose location string names no city ("Hibrit",
+# "Uzaktan") still counts as reachable - without this, Code2Work's "Veri
+# Bilimci" program was dropped for having no city in its location field.
+# Non-Istanbul cities are still rejected: location_reject_city runs first.
+turkey_only_sources:
+  - techcareer
+  - youthall
+
+# Location strings that name no geography at all - only a work arrangement.
+# This is what the curated-company relaxation is actually for: a known-Istanbul
+# employer whose ATS location field was left vague. Without it, `from_curated`
+# was an unconditional pass on the whole non-remote branch and Trendyol's real
+# Amsterdam/Berlin/Bengaluru Lever postings were all KEPT - verified live
+# 2026-09-14.
+location_no_geo:
+  - '^\s*$'
+  - '^(hibrit|hybrid|uzaktan|remote|ofis|office|on[- ]?site|tam zamanl[ıi]|full[- ]?time|belirtilmemi[sş])[\s/,-]*$'
+
+# Location strings that mean "this posting is remote" even when the source left
+# the workplace field unset. Without this, "Anywhere (US only)" with
+# workplace:unknown skipped BOTH remote gates and passed on the country list's
+# old 'anywhere' pattern - verified live 2026-09-14. Matched against the
+# location field only, never the title ("Global ... Engineer" is a job name,
+# not a geography). "hybrid/hibrit" is deliberately absent: hybrid means onsite
+# somewhere, so it must still name a city.
+location_remote_hint:
+  - 'remote|uzaktan|anywhere|worldwide|distributed team|work from home|evden|home[- ]based'
+
+# A Turkish city that isn't Istanbul is a reject even when workplace is
+# "unknown"/"hybrid" and the country-level gate above would otherwise pass it
+# (e.g. techcareer's "Ankara / Türkiye"). Skipped when an Istanbul match also
+# hits (multi-city postings). Checked first, in tracker.py.
+#
+# ponytail: a hand-listed blacklist, so an unlisted city passes on the
+# country-level gate. Extended to the 30 largest (Samsun/Trabzon/Mersin etc.
+# were all being KEPT). The right shape is "country-level accept requires no
+# non-Istanbul city token", which needs a city gazetteer - add one only if
+# postings from unlisted towns actually show up in the report.
+location_reject_city:
+  - 'ankara|izmir|i̇zmir|bursa|antalya|kocaeli|gebze|çayırova|cayirova|konya|adana|eskisehir|eskişehir|kayseri|denizli|gaziantep'
+  - 'samsun|mersin|sakarya|adapazarı|adapazari|tekirdağ|tekirdag|çorlu|corlu|trabzon|manisa|şanlıurfa|sanliurfa|diyarbakır|diyarbakir'
+  - 'sivas|aydın|\baydin\b|muğla|mugla|balıkesir|balikesir|malatya|\bvan\b|erzurum|hatay|isparta|elazığ|elazig|kütahya|kutahya|ordu|çanakkale|canakkale'
+
+# Remote listings are kept only if they look open to Turkey/EMEA. Bare
+# "worldwide/anywhere/global" is deliberately NOT enough on its own - most of
+# those are US-facing in practice and were the biggest source of noise.
+remote_ok:
+  - 'emea|europe|avrupa|\beu\b'
+  - 'turkiye|türkiye|turkey'
+  # Boundaries matter: bare 'eet' matched Fleet/Meet/Sweet/Street and 'cet'
+  # matched Faceted, so "ML Engineer, Fleet Intelligence | Anywhere in the
+  # World" was passing the EMEA gate on a timezone that was never mentioned.
+  - '\b(cet|cest|eet|eest|gmt|utc)\b'
+
+# Remote listings pinned elsewhere get dropped.
+# Checked against title + description, NOT just the location string, and it
+# OVERRIDES a matching Istanbul - unlike remote_reject, where naming Istanbul in
+# a multi-city list wins. These are exclusivity statements, so a posting that
+# says both "Istanbul" and "must be authorized to work in the US" is not
+# reachable no matter which city it also lists. Kept deliberately narrow: only
+# phrases that state a hard legal requirement, never a mere country mention.
+remote_eligibility_reject:
+  # The lookbehinds are the whole point: without them "you do NOT need to be
+  # authorized to work in the US" - an explicitly open posting - was rejected.
+  - '(?<!not )(?<!n.t )(must|need to|required to) be (legally )?authoriz(ed)? to work in the (us|u\.s\.|united states)'
+  - '(?<!not )(?<!n.t )(us|u\.s\.|united states) work authoriz|requires? (us|u\.s\.) citizenship|(us|u\.s\.|american) citizenship (is )?required'
+  - 'must be (a )?(us|u\.s\.|american) (citizen|resident)|green card holder'
+  - 'must (reside|be located|be based) in the (us|u\.s\.|united states)'
+  - '\bus[- ]only\b|\bu\.s\.[- ]only\b|usa[- ]only'
+
+remote_reject:
+  - 'united states|\busa?\b|\bus[- ]only\b|us[- ]based'
+  - 'canada|\bcan\b only|latam|brazil|mexico|argentina'
+  - 'india|philippines|pakistan|indonesia|vietnam'
+  - 'australia|new zealand|japan|singapore|korea'
+  # "middle east" on its own is gone: it is the M in EMEA, so it was rejecting
+  # the literal expansion "Europe, Middle East and Africa" - including one real
+  # posting whose location string also named Istanbul. The Gulf-specific tokens
+  # below are what actually pin a role to Dubai/Riyadh.
+  - '\bapac\b|africa only|gulf|\buae\b|dubai|saudi|riyadh|abu dhabi|qatar|doha'
+  - 'must (be )?(reside|live|located|based) in'
+  - 'authorized to work in the (us|united states|uk)'
+  - 'work permit for (the )?(us|united states|uk|canada)'
+
+# ------------------------------------------------------------------- scoring
+# Keyword -> points. Drawn from the CV; retune freely.
+skill_weights:
+  python: 5
+  pytorch: 5
+  tensorflow: 3
+  scikit-learn: 4
+  sklearn: 4
+  pandas: 4
+  numpy: 3
+  fastapi: 5
+  'sql': 4
+  docker: 3
+  'llm': 5
+  'rag': 5
+  'nlp': 4
+  'mlops': 3
+  'federated learning': 6
+  'knowledge distillation': 5
+  'semi-supervised': 4
+  'cnn': 3
+  'deep learning': 4
+  'machine learning': 4
+  'c#': 3
+  'or-tools': 4
+  'constraint programming': 4
+  'optimization': 3
+  'chromadb': 4
+  'vector database': 4
+  'model context protocol': 5
+  'mcp': 3
+  'git': 1
+  'linux': 1
+  'aws': 2
+  'gcp': 2
+  'azure': 2
+  'spark': 2
+  'airflow': 2
+  'kubernetes': 2
+
+score_bonus:
+  seniority_boost: 15      # per matched junior/intern signal
+  istanbul: 8
+  remote: 5
+  hybrid: 6
+  posted_last_7_days: 10
+  posted_last_30_days: 4
+
+# --------------------------------------------------------- LinkedIn shortcuts
+# Not scraped. Rendered as clickable search links at the top of the report.
+linkedin_keywords:
+  - Data Scientist
+  - Machine Learning Engineer
+  - AI Engineer
+  - Junior Data Scientist
+  - Yeni Mezun Data
+  - Data Science Intern
+  - NLP Engineer
+  - MLOps Engineer
