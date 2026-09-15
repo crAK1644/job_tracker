@@ -9,3 +9,5 @@ cv/*.pdf
 *.bak
 cv/master.yaml
 .DS_Store
+web/node_modules/
+web/dist/

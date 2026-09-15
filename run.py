@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""CLI: discover | fetch | report | mark | selftest
+"""CLI: discover | fetch | report | panel | mark | selftest
 
     uv run python run.py fetch              # pull all sources, score, store
     uv run python run.py fetch --browser    # + hiring.cafe (Playwright, slower)
     uv run python run.py fetch --source lever:trendyol
     uv run python run.py report             # render report.html from the DB
+    uv run python run.py panel              # serve the React dashboard locally
     uv run python run.py mark <uid> applied
     uv run python run.py discover           # verify companies.yaml tokens (no Playwright)
     uv run python run.py discover --auto    # + crawl ats:unknown companies with Playwright
@@ -204,6 +205,12 @@ def cmd_report(args) -> int:
     print(f"wrote {REPORT_PATH} ({len(tracker.active_jobs(conn))} active listings)")
     conn.close()
     return 0
+
+
+def cmd_panel(args) -> int:
+    """Serve the local React dashboard and its SQLite-backed API."""
+    import panel_server
+    return panel_server.serve(host=args.host, port=args.port)
 
 
 def _table_exists(conn, name) -> bool:
@@ -1030,6 +1037,32 @@ def cmd_selftest(args) -> int:
     check("matched_skills names the skills that scored a job",
           "spring boot" in jf.matched_skills(spring_job))
 
+    # parse_cv_to_derived is the pure core the panel upload reuses: same rules,
+    # but returns (derived, summary) and raises instead of writing/printing.
+    cv_text = (tmp / "cv.txt").read_text()
+    derived_mem, summary_mem = _cv.parse_cv_to_derived(cv_text, skills_path=_cv.SKILLS_PATH)
+    check("parse_cv_to_derived returns only allowlisted keys",
+          set(derived_mem) <= tracker.DERIVED_KEYS)
+    check("parse_cv_to_derived summary lists detected skills", "aws" in summary_mem["skills"])
+    try:
+        _cv.parse_cv_to_derived("java", skills_path=_cv.SKILLS_PATH)
+        _raised = False
+    except ValueError:
+        _raised = True
+    check("parse_cv_to_derived raises on a too-short CV", _raised)
+
+    # Filter.score_only re-ranks without gating (the panel re-scores the pool
+    # against a per-user CV): a skill-matching job outscores a skill-less one,
+    # and a job evaluate() would reject still gets a number - never dropped.
+    _hi = {"title": "Spring Boot Engineer", "description": "Amazon Web Services, PostgreSQL",
+           "location": "Istanbul", "workplace": "remote", "posted_at": ""}
+    _lo = {"title": "Office Manager", "description": "scheduling and filing",
+           "location": "Istanbul", "workplace": "remote", "posted_at": ""}
+    check("score_only ranks a skill-matching job above a skill-less one",
+          jf.score_only(_hi) > jf.score_only(_lo))
+    check("score_only never gates (returns a float for a would-be-rejected job)",
+          isinstance(jf.score_only(_lo), float))
+
     # parser is transactional: too little text preserves the prior derived and
     # returns nonzero (codex-sol-4).
     (tmp / "d2.yaml").write_text("skill_weights: {python: 5}\n", encoding="utf-8")
@@ -1083,6 +1116,33 @@ def cmd_selftest(args) -> int:
     sel2, _ = _cv.select_bullets([{"text": "x", "skills": []}, {"text": "y", "skills": []},
                                   {"text": "z", "skills": []}], set(), min_n=2, max_n=4)
     check("a no-overlap experience still keeps its min-N bullets", len(sel2) == 2)
+    sel3, om3 = _cv.select_bullets(
+        [{"text": f"o{i}", "skills": ["kubernetes"]} for i in range(5)],
+        {"kubernetes"}, min_n=2, max_n=4)
+    check("every overlapping bullet survives for ATS (no cap drop)",
+          len(sel3) == 5 and om3 == [])
+
+    # ATS keyword surfacing: intersection of {job mentions} and {CV has}, in the
+    # job's spelling; never a skill the candidate lacks (no-invent contract).
+    sk_ats = _cv.load_skills(_cv.SKILLS_PATH)
+    mast_ats = {"summary": "Backend engineer.",
+                "experiences": [{"company": "C", "role": "R", "dates": "2023-",
+                                 "bullets": [{"text": "Ran kubernetes clusters.",
+                                              "skills": ["kubernetes"]}]}],
+                "education": [{"school": "Bogazici", "degree": "BSc CmpE",
+                               "dates": "2017-2021"}],
+                "skills": {"Cloud": ["Kubernetes", "Python"]}}
+    ats_kw = _cv.ats_keywords(mast_ats, "Platform Engineer",
+                              "We need k8s and golang.", sk_ats)
+    check("ATS surfaces a job keyword the candidate has", "k8s" in ats_kw)
+    check("ATS never emits a skill the candidate lacks (golang)",
+          "golang" not in ats_kw)
+    check("Key Skills section renders in the job's spelling",
+          "k8s" in _cv._ats_tex(ats_kw) and "Key Skills" in _cv._ats_tex(ats_kw))
+    edu_tex = _cv._education_tex(mast_ats["education"])
+    check("education always renders (static section)",
+          "Education" in edu_tex and "BSc CmpE" in edu_tex)
+    check("education folds its heading when empty", _cv._education_tex([]) == "")
 
     # copyable command is shlex-quoted and the uid alphabet is hex (codex-sol-11).
     u = sources.make_uid("Acme", "Data Scientist", "https://x/1")
@@ -1145,6 +1205,13 @@ def main() -> int:
 
     p = sub.add_parser("report", help="render report.html from the DB")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("panel", help="serve the local React dashboard")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="address to bind (default: localhost only)")
+    p.add_argument("--port", type=int, default=8000,
+                   help="port to serve on (default: 8000)")
+    p.set_defaults(func=cmd_panel)
 
     p = sub.add_parser("mark", help="set a job's status")
     p.add_argument("uid")

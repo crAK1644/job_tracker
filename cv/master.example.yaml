@@ -1,6 +1,8 @@
 # Example CV scaffold. Copy this to cv/master.yaml and fill with your real
 # content, then run `uv run python run.py cv build <uid>`. build_cv selects the
 # bullets most relevant to a job post (by the skills: tags) - it never invents text.
+# A "Key Skills for this Role" section is generated per job from the overlap of
+# this CV and the job post - it only ever lists skills already present below.
 name: Ayberk Karataban
 contact:
   email: you@example.com

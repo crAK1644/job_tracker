@@ -191,6 +191,34 @@ def _atomic_write_yaml(path, data: dict) -> None:
         raise
 
 
+def parse_cv_to_derived(text, skills_path=SKILLS_PATH,
+                        min_chars=MIN_CHARS, min_skills=MIN_SKILLS) -> tuple[dict, dict]:
+    """Pure core of `parse_cv`: extracted CV text -> (validated derived dict,
+    JSON-friendly summary). Raises ValueError on too-short text, too few skills,
+    or an invalid profile - never reads a file, writes, or prints. Both the CLI
+    (`parse_cv`) and the panel upload endpoint call this so the parse rules and
+    the transactional guarantee live in exactly one place."""
+    if len(text.strip()) < min_chars:
+        raise ValueError(f"extracted only {len(text.strip())} chars (< {min_chars}) "
+                         f"- is the CV a scanned image?")
+    skills = load_skills(skills_path)
+    present = detect_skills(text, skills)
+    if len(present) < min_skills:
+        raise ValueError(f"only {len(present)} skills detected (< {min_skills})")
+    level, maxyr = detect_seniority(text)
+    derived = build_derived(present, skills, level)
+    _validate_derived(derived)  # raises ValueError on a malformed dict
+    summary = {
+        "skills": sorted(present),
+        "domains": dominant_domains(present, skills),
+        "seniority": level,
+        "yearsSeen": maxyr,
+        "aliasCount": len(derived["skill_weights"]),
+        "gateCount": len(derived["topic_must_match"]),
+    }
+    return derived, summary
+
+
 def parse_cv(cv_path, skills_path=SKILLS_PATH, derived_path=DERIVED_PATH,
              min_chars=MIN_CHARS, min_skills=MIN_SKILLS) -> int:
     """Parse a CV to derived.yaml. Transactional: on any failure the existing
@@ -201,37 +229,21 @@ def parse_cv(cv_path, skills_path=SKILLS_PATH, derived_path=DERIVED_PATH,
     except Exception as e:
         print(f"cv parse: {e}", file=sys.stderr)
         return 1
-    if len(text.strip()) < min_chars:
-        print(f"cv parse: extracted only {len(text.strip())} chars "
-              f"(< {min_chars}) - is the PDF a scan? derived.yaml left as-is",
-              file=sys.stderr)
-        return 1
-
-    skills = load_skills(skills_path)
-    present = detect_skills(text, skills)
-    if len(present) < min_skills:
-        print(f"cv parse: only {len(present)} skills detected "
-              f"(< {min_skills}) - derived.yaml left as-is", file=sys.stderr)
-        return 1
-
-    level, maxyr = detect_seniority(text)
-    derived = build_derived(present, skills, level)
     try:
-        _validate_derived(derived)
-    except Exception as e:
-        print(f"cv parse: built an invalid profile ({e}) - derived.yaml left as-is",
-              file=sys.stderr)
+        derived, summary = parse_cv_to_derived(text, skills_path, min_chars, min_skills)
+    except ValueError as e:
+        print(f"cv parse: {e} - derived.yaml left as-is", file=sys.stderr)
         return 1
     _atomic_write_yaml(derived_path, derived)
 
-    doms = dominant_domains(present, skills)
     print(f"cv parse: wrote {derived_path}")
-    print(f"  skills detected ({len(present)}): "
-          f"{', '.join(sorted(present))}")
-    print(f"  dominant domain(s): {', '.join(doms)}")
-    print(f"  seniority: {level}" + (f" (~{maxyr}y seen)" if maxyr else ""))
-    print(f"  {len(derived['skill_weights'])} aliases scored, "
-          f"{len(derived['topic_must_match'])} gate patterns")
+    print(f"  skills detected ({len(summary['skills'])}): "
+          f"{', '.join(summary['skills'])}")
+    print(f"  dominant domain(s): {', '.join(summary['domains'])}")
+    print(f"  seniority: {summary['seniority']}"
+          + (f" (~{summary['yearsSeen']}y seen)" if summary["yearsSeen"] else ""))
+    print(f"  {summary['aliasCount']} aliases scored, "
+          f"{summary['gateCount']} gate patterns")
     print("  -> run `uv run python run.py fetch` to re-score jobs with this CV")
     return 0
 
@@ -291,19 +303,43 @@ def job_keywords(title: str, desc: str, skills: dict) -> set:
     return kw
 
 
+def ats_keywords(master: dict, title: str, desc: str, skills: dict) -> list[str]:
+    """ATS keyword list: the job's own alias spellings for skills the candidate
+    GENUINELY has. Intersection of {skills the job mentions} and {skills present
+    in the CV} - never a keyword the candidate lacks (the no-invent contract). The
+    job's spelling is emitted so a literal ATS keyword filter matches."""
+    cand_text = " ".join([
+        *(b.get("text", "") for e in (master.get("experiences") or [])
+          for b in (e.get("bullets") or [])),
+        *(str(v) for g in (master.get("skills") or {}).values() for v in g),
+        master.get("summary", "") or "",
+    ])
+    cand = detect_skills(cand_text, skills)
+    job = detect_skills(f"{title} {desc}", skills)
+    seen, out = set(), []
+    for canon in sorted(cand.keys() & job.keys(),
+                        key=lambda c: (-skills[c].get("weight", 0), c)):
+        for alias in job[canon]:            # aliases the JOB used = literal ATS terms
+            if alias.lower() not in seen:
+                seen.add(alias.lower())
+                out.append(alias)
+    return out
+
+
 def select_bullets(bullets: list, job_kw: set, min_n=2, max_n=4):
-    """Pick the bullets most relevant to the job, within one experience. Ranked
-    by skill overlap (desc) then original order (stable); keep at least min_n so
-    no experience is emptied, at most max_n for length. Returns (selected,
-    omitted) both in the ORIGINAL chronological order (codex-sol-10)."""
-    scored = [(len({t.lower() for t in b.get("skills", [])} & job_kw), i, b)
-              for i, b in enumerate(bullets)]
-    ranked = sorted(scored, key=lambda x: (-x[0], x[1]))
-    n_overlap = sum(1 for o, _, _ in scored if o > 0)
-    keep_n = min(len(bullets), max_n, max(min_n, n_overlap))
-    chosen_idx = {i for _, i, _ in ranked[:keep_n]}
-    selected = [b for i, b in enumerate(bullets) if i in chosen_idx]
-    omitted = [b for i, b in enumerate(bullets) if i not in chosen_idx]
+    """Pick bullets for one experience. EVERY bullet whose skills overlap the job
+    is kept - they carry the ATS keywords in context and must not be dropped. If
+    fewer than min_n overlap, top up with original-order non-overlapping bullets
+    so no experience is emptied. Returns (selected, omitted), both in ORIGINAL
+    chronological order (codex-sol-10)."""
+    overlap = [i for i, b in enumerate(bullets)
+               if {t.lower() for t in b.get("skills", [])} & job_kw]
+    over = set(overlap)
+    filler = [i for i, b in enumerate(bullets) if i not in over]
+    need = max(0, min(min_n, max_n) - len(overlap))  # floor to min_n; never drop overlaps
+    keep = over | set(filler[:need])
+    selected = [b for i, b in enumerate(bullets) if i in keep]
+    omitted = [b for i, b in enumerate(bullets) if i not in keep]
     return selected, omitted
 
 
@@ -325,6 +361,26 @@ def _experience_tex(experiences: list, job_kw: set) -> str:
             out.append(r"\begin{itemize}" + "\n" + items + "\n" + r"\end{itemize}")
         out.append("")
     return "\n".join(out).strip()
+
+
+def _ats_tex(kws: list) -> str:
+    """Folded heading: empty keyword list renders nothing (no orphan title)."""
+    if not kws:
+        return ""
+    return r"\heading{Key Skills for this Role}" + "\n" + ", ".join(
+        latex_escape(k) for k in kws)
+
+
+def _education_tex(education: list) -> str:
+    """Static section - same on every CV. Folded heading; empty -> nothing."""
+    if not education:
+        return ""
+    lines = [r"\heading{Education}"]
+    for e in education:
+        head = ", ".join(x for x in (latex_escape(e.get("degree", "")),
+                                     latex_escape(e.get("school", ""))) if x)
+        lines.append(rf"\textbf{{{head}}}\hfill {latex_escape(e.get('dates', ''))}\\")
+    return "\n".join(lines)
 
 
 def _skills_tex(groups: dict) -> str:
@@ -403,12 +459,17 @@ def build_cv(uid: str, out=None, master_path=MASTER_PATH,
     job_kw = job_keywords(row["title"], row["description"] or "", skills)
     print(f"cv build: tailoring to {row['title']} @ {row['company']}")
     print(f"  job mentions: {', '.join(sorted(job_kw)) or '(no known skills)'}")
+    ats = ats_keywords(master, row["title"], row["description"] or "", skills)
+    print(f"  ATS keywords (only skills already in your CV): "
+          f"{', '.join(ats) or '(none)'}")
 
     values = {
         "NAME": latex_escape(master.get("name", "")),
         "CONTACT": _contact_tex(master.get("contact", {}) or {}),
         "SUMMARY": latex_escape((master.get("summary") or "").strip()),
+        "KEYSKILLS": _ats_tex(ats),
         "EXPERIENCE": _experience_tex(master.get("experiences", []) or [], job_kw),
+        "EDUCATION": _education_tex(master.get("education", []) or []),
         "SKILLS": _skills_tex(master.get("skills", {}) or {}),
     }
     tex = fill_template(template, values)

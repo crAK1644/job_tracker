@@ -247,6 +247,46 @@ class Filter:
 
         return True, round(score, 1), ""
 
+    def score_only(self, j) -> float:
+        """The score `evaluate` computes, but with NO accept/reject gate. Used to
+        re-rank the already-curated stored pool against a per-user CV profile at
+        request time (the panel): a job that wouldn't pass this profile's gates
+        just scores low rather than vanishing (match mode = re-rank all). Same
+        skill_rx + score_bonus math as evaluate, so an uploaded CV re-orders by
+        its own skill_weights.
+        ponytail: intentionally duplicates evaluate's scoring tail rather than
+        refactoring that tested fetch-time hot path; if the two ever drift, pull
+        the tail into one helper both call."""
+        n = lambda s: unicodedata.normalize("NFC", s or "")  # noqa: E731
+        get = lambda k: (j[k] if k in j.keys() else None) if hasattr(j, "keys") else j.get(k)
+        blob = f"{n(get('title'))} {n(get('description'))}"
+        loc = n(get("location"))
+        workplace = (get("workplace") or "").lower()
+        score = 0.0
+        for rx, _key, weight in self.skill_rx:
+            if rx.search(blob):
+                score += weight
+        if any(rx.search(blob) for rx in self.sen_boost):
+            score += self.bonus.get("seniority_boost", 0)
+        if any(rx.search(loc) for rx in self.loc_city):
+            score += self.bonus.get("istanbul", 0)
+        if workplace == "remote":
+            score += self.bonus.get("remote", 0)
+        elif workplace == "hybrid":
+            score += self.bonus.get("hybrid", 0)
+        posted = get("posted_at") or ""
+        if posted:
+            try:
+                posted_date = datetime.fromisoformat(posted.replace("Z", "+00:00")).date()
+                days = (datetime.now(timezone.utc).date() - posted_date).days
+                if 0 <= days <= 7:
+                    score += self.bonus.get("posted_last_7_days", 0)
+                elif 0 <= days <= 30:
+                    score += self.bonus.get("posted_last_30_days", 0)
+            except ValueError:
+                pass
+        return round(score, 1)
+
     def matched_skills(self, j: dict) -> list[str]:
         """Skill keys whose pattern hits this job - the same skill_rx the
         score uses, so the report chips explain the number. Recomputed at
